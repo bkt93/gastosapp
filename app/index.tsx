@@ -17,7 +17,7 @@ import { saveUser } from "../src/auth-storage";
 import { auth } from "../src/firebase";
 
 export default function AuthScreen() {
-    const [mode, setMode] = useState<"login" | "register">("register");
+    const [mode, setMode] = useState<"login" | "register">("login");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [displayName, setDisplayName] = useState("");
