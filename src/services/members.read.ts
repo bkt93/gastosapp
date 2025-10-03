@@ -22,6 +22,7 @@ export function subscribeProjectMembers(
                 uid: d.id,
                 role: (v.role as 'owner' | 'member') ?? 'member',
                 joinedAt: typeof v.joinedAt?.toDate === 'function' ? v.joinedAt.toDate() : null,
+                displayName: v.displayName ?? null,
             };
         });
         onChange(rows);

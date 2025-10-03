@@ -1,5 +1,5 @@
 // app/projects/[projectId].tsx
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
@@ -255,6 +255,16 @@ export default function ProjectTemplateScreen() {
                             )}
                         </View>
                     ) : null}
+
+                    <Link
+                        href={{ pathname: "/expenses", params: { projectId: String(projectId) } }} 
+                        asChild
+                    >
+                        <Pressable style={{ padding: 12, borderRadius: 10, backgroundColor: "#0ea5e9" }}>
+                            <Text style={{ color: "#fff", fontWeight: "700" }}>Gastos del hogar</Text>
+                        </Pressable>
+                    </Link>
+
                 </>
             ) : (
                 <Text>Cargando…</Text>

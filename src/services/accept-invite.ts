@@ -40,6 +40,10 @@ export async function acceptInviteByCode(codeRaw: string): Promise<string> {
             role: 'member',
             uid: user.uid,            // 👈 agregar
             joinedAt: serverTimestamp(),
+            displayName:
+                auth.currentUser!.displayName ??
+                auth.currentUser!.email?.split("@")[0] ??
+                "Sin nombre",
         });
         batch.update(invRef, {
             status: 'accepted',

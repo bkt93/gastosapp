@@ -7,12 +7,15 @@ export async function addMemberFlat(projectId: string, uid: string, role: 'owner
   await setDoc(doc(flatCol, id), { projectId, uid, role, joinedAt });
 }
 
-export async function ensureSelfMembershipUid(projectId: string) {
-  const me = auth.currentUser?.uid;
+export async function ensureSelfMembership(projectId: string) {
+  const me = auth.currentUser;
   if (!me) return;
-  const ref = doc(db, 'projects', projectId, 'members', me);
+  const ref = doc(db, 'projects', projectId, 'members', me.uid);
   const snap = await getDoc(ref);
-  if (snap.exists() && !snap.data()?.uid) {
-    await setDoc(ref, { uid: me }, { merge: true });
+
+  const patch: any = { uid: me.uid };
+  if (!snap.exists() || !snap.data()?.displayName) {
+    patch.displayName = me.displayName ?? me.email?.split('@')[0] ?? 'Sin nombre';
   }
+  await setDoc(ref, patch, { merge: true });
 }

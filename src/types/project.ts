@@ -19,6 +19,7 @@ export interface ProjectMember {
   uid: string;
   role: MemberRole;
   joinedAt: Timestamp;
+  displayName?: string | null;
 }
 
 export interface Invite {

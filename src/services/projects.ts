@@ -22,8 +22,12 @@ export async function createProject(name: string, currency = 'ARS') {
     const memberRef = doc(db, 'projects', projectRef.id, 'members', user.uid);
     batch.set(memberRef, {
         role: 'owner',
-        uid: user.uid,            
+        uid: user.uid,
         joinedAt: now,
+        displayName:
+            auth.currentUser!.displayName ??
+            auth.currentUser!.email?.split("@")[0] ??
+            "Sin nombre",
     });
 
     await batch.commit();
