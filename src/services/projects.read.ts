@@ -1,4 +1,3 @@
-// src/services/projects.read.ts
 import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -6,7 +5,8 @@ export type ProjectListItem = {
   id: string;
   name: string;
   currency: string;
-  role: 'owner' | 'member';     
+  role: 'owner' | 'member';
+  iconEmoji?: string;
 };
 
 export function subscribeOwnedProjectsByUid(
@@ -24,7 +24,8 @@ export function subscribeOwnedProjectsByUid(
           id: d.id,
           name: v.name ?? 'Proyecto',
           currency: v.currency ?? 'ARS',
-          role: 'owner',                        // <- agregar
+          role: 'owner',
+          iconEmoji: v.iconEmoji ?? undefined,
         };
       });
       onChange(data);
@@ -42,7 +43,8 @@ export async function fetchOwnedProjectsOnce(uid: string): Promise<ProjectListIt
       id: d.id,
       name: v.name ?? 'Proyecto',
       currency: v.currency ?? 'ARS',
-      role: 'owner',                            // <- agregar
+      role: 'owner',
+      iconEmoji: v.iconEmoji ?? undefined,       // 👈 idem
     } as ProjectListItem;
   });
 }

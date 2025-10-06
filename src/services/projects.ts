@@ -2,7 +2,7 @@
 import { collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
-export async function createProject(name: string, currency = 'ARS') {
+export async function createProject(name: string, currency = 'ARS', opts?: { iconEmoji?: string }) {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
 
@@ -10,14 +10,17 @@ export async function createProject(name: string, currency = 'ARS') {
     const batch = writeBatch(db);
 
     const projectRef = doc(collection(db, 'projects'));
-    batch.set(projectRef, {
+    const payload: any = {
         ownerUid: user.uid,
         name,
         currency,
         status: 'active',
         createdAt: now,
         updatedAt: now,
-    });
+    };
+
+    if (opts?.iconEmoji) payload.iconEmoji = opts.iconEmoji;
+    batch.set(projectRef, payload);
 
     const memberRef = doc(db, 'projects', projectRef.id, 'members', user.uid);
     batch.set(memberRef, {

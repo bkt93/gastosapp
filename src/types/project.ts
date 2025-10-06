@@ -13,6 +13,7 @@ export interface Project {
   status: ProjectStatus;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  iconEmoji?: string;
 }
 
 export interface ProjectMember {

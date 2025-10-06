@@ -1,21 +1,47 @@
 // app/home.tsx
-import { Stack, useRouter } from 'expo-router';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, Text, TextInput, View } from 'react-native';
-import { clearUser, getStoredUser, type StoredUser } from '../src/auth-storage';
-import { auth } from '../src/firebase';
-import { createProject } from '../src/services/projects';
-import { subscribeSharedProjectsByUid } from '../src/services/projects.members.read';
-import { fetchOwnedProjectsOnce, subscribeOwnedProjectsByUid, type ProjectListItem } from '../src/services/projects.read';
+import { useRouter } from "expo-router";
+import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import { useEffect, useMemo, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    Modal,
+    Pressable,
+    StatusBar,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
+import { clearUser, getStoredUser, type StoredUser } from "../src/auth-storage";
+import { auth } from "../src/firebase";
+import { createProject } from "../src/services/projects";
+import { subscribeSharedProjectsByUid } from "../src/services/projects.members.read";
+import {
+    subscribeOwnedProjectsByUid,
+    type ProjectListItem
+} from "../src/services/projects.read";
 
+import { SafeAreaView } from "react-native-safe-area-context";
+import AppHeader from "../src/components/AppHeader";
+import FAB from "../src/components/FAB";
+import GreetingBar from "../src/components/GreetingBar";
+import ProjectCard from "../src/components/ProjectCard";
+import { colors, radius, spacing } from "../src/theme";
+
+
+
+const EMOJI_CHOICES = ["🏠", "👪", "🐶", "🌴", "🛠️", "🧺", "🧾", "🎬", "🎮", "🍔", "✈️", "🚗", "💡", "🔥", "💧", "💳", "📦", "🧸", "🧪", "🧰"];
 
 export default function HomeScreen() {
     const router = useRouter();
+
     const [items, setItems] = useState<ProjectListItem[]>([]);
+    const [sharedItems, setSharedItems] = useState<ProjectListItem[]>([]);
+
     const [showModal, setShowModal] = useState(false);
-    const [name, setName] = useState('');
-    const [currency, setCurrency] = useState('ARS');
+    const [name, setName] = useState("");
+    const [currency, setCurrency] = useState("ARS");
 
     const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
     const [loadingUser, setLoadingUser] = useState(true);
@@ -23,14 +49,15 @@ export default function HomeScreen() {
     const [authUser, setAuthUser] = useState<User | null>(null);
     const [authReady, setAuthReady] = useState(false);
 
-    const [sharedItems, setSharedItems] = useState<ProjectListItem[]>([]);
-
-
     const canCreate = useMemo(
         () => name.trim().length > 0 && authReady && !!authUser,
         [name, authReady, authUser]
     );
 
+    const [iconEmoji, setIconEmoji] = useState<string>("🏠"); // por defecto la casitaaa
+
+
+    // cargar user guardado
     useEffect(() => {
         (async () => {
             const u = await getStoredUser();
@@ -39,6 +66,7 @@ export default function HomeScreen() {
         })();
     }, []);
 
+    // escuchar auth real
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, (u) => {
             setAuthUser(u);
@@ -47,240 +75,314 @@ export default function HomeScreen() {
         return () => unsub();
     }, []);
 
+    // proyectos propios
     useEffect(() => {
-        if (!authReady || !authUser?.uid) return;   // ✅ esperar auth real
+        if (!authReady || !authUser?.uid) return;
         const unsub = subscribeOwnedProjectsByUid(authUser.uid, setItems);
         return () => unsub && unsub();
     }, [authReady, authUser?.uid]);
 
+    // compartidos
     useEffect(() => {
         if (!authReady || !authUser?.uid) return;
         const unsub = subscribeSharedProjectsByUid(authUser.uid, setSharedItems);
         return () => unsub && unsub();
     }, [authReady, authUser?.uid]);
 
-
     const onCreate = async () => {
         try {
             if (!authReady || !authUser) {
-                Alert.alert('Sesión', 'Tu sesión todavía se está restaurando. Probá de nuevo en un momento.');
+                Alert.alert("Sesión", "Tu sesión todavía se está restaurando. Probá de nuevo en un momento.");
                 return;
             }
             const projectName = name.trim();
             if (!projectName) return;
 
-            const id = await createProject(projectName, currency);
+            // 👇 pasa iconEmoji al servicio
+            const id = await createProject(projectName, currency, { iconEmoji });
 
-            // ✅ Insertar optimista SIN duplicar
             setItems(prev => {
                 const without = prev.filter(p => p.id !== id);
-                return [{ id, name: projectName, currency, role: 'owner' }, ...without];
+                return [{ id, name: projectName, currency, role: "owner", iconEmoji }, ...without];
             });
 
             setShowModal(false);
-            setName('');
+            setName("");
+            setIconEmoji("🏠");
         } catch (e: any) {
-            Alert.alert('Error', e?.message ?? 'No se pudo crear el proyecto');
+            Alert.alert("Error", e?.message ?? "No se pudo crear el proyecto");
         }
     };
-
-
-
 
     const onLogout = async () => {
         try {
             await signOut(auth);
         } finally {
-            await clearUser?.(); // si tu helper existe
-            router.replace('/'); // vuelve al index (auth)
+            await clearUser?.();
+            router.replace("/");
         }
     };
 
-    const reload = async () => {
-        try {
-            if (!authReady || !authUser?.uid) return;
-            const rows = await fetchOwnedProjectsOnce(authUser.uid);
-            console.log('fetch once rows:', rows.length);
-            setItems(rows); // fuerza a ver lo que devuelve el backend ahora mismo
-        } catch (e: any) {
-            console.log('fetch once error:', e);
-            Alert.alert('Lectura', e?.message ?? String(e));
+    const mergedProjects = useMemo(() => {
+        // Mapa por id para evitar duplicados
+        const byId = new Map<string, ProjectListItem>();
+
+        // Primero los propios (owner)
+        for (const p of items) byId.set(p.id, p);
+
+        // Luego los compartidos: si ya existe owner, lo dejamos; si no, agregamos member
+        for (const p of sharedItems) {
+            const existing = byId.get(p.id);
+            if (!existing) byId.set(p.id, p);
+            else if (existing.role !== 'owner' && p.role === 'member') byId.set(p.id, p);
         }
-    };
+
+        // Orden (opcional): owner primero, luego member; y por nombre
+        return Array.from(byId.values()).sort((a, b) => {
+            if (a.role !== b.role) return a.role === 'owner' ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+    }, [items, sharedItems]);
+
+    // const reload = async () => {
+    //     try {
+    //         if (!authReady || !authUser?.uid) return;
+    //         const rows = await fetchOwnedProjectsOnce(authUser.uid);
+    //         setItems(rows);
+    //     } catch (e: any) {
+    //         Alert.alert("Lectura", e?.message ?? String(e));
+    //     }
+    // };
+
+    const renderItem = ({ item }: { item: ProjectListItem & { iconEmoji?: string } }) => (
+        <ProjectCard
+            name={item.name}
+            currency={item.currency}
+            role={item.role}
+            iconEmoji={item.iconEmoji} // 👈 lo mostramos
+            onPress={() => router.push(`/projects/${item.id}`)}
+        />
+    );
 
     if (loadingUser) {
         return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator />
-                <Text style={{ marginTop: 8 }}>Cargando…</Text>
+            <View
+                style={{
+                    flex: 1,
+                    backgroundColor: colors.bg,
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <ActivityIndicator color={colors.text} />
+                <Text style={{ color: colors.textMuted, marginTop: 8 }}>Cargando…</Text>
             </View>
         );
     }
 
-    const renderProjectCard = ({ item }: { item: ProjectListItem }) => (
-        <Pressable
-            onPress={() => router.push(`/projects/${item.id}`)}
-            style={({ pressed }) => ({
-                opacity: pressed ? 0.7 : 1,
-                backgroundColor: '#fff',
-                padding: 16,
-                borderRadius: 12,
-                marginBottom: 12,
-                borderWidth: 1,
-                borderColor: '#e5e7eb',
-            })}
-        >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ fontSize: 16, fontWeight: '600' }}>{item.name}</Text>
 
-                <View style={{
-                    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 9999,
-                    backgroundColor: item.role === 'owner' ? '#E5F2FF' : '#F1F5F9',
-                    borderWidth: 1, borderColor: item.role === 'owner' ? '#93C5FD' : '#CBD5E1',
-                }}>
-                    <Text style={{
-                        fontSize: 12, fontWeight: '700',
-                        color: item.role === 'owner' ? '#1D4ED8' : '#334155'
-                    }}>
-                        {item.role === 'owner' ? 'Propietario' : 'Miembro'}
-                    </Text>
-                </View>
-            </View>
-
-            <Text style={{ color: '#6b7280', marginTop: 6 }}>
-                Moneda: {item.currency}
-            </Text>
-        </Pressable>
-    );
+    const displayName =
+        storedUser?.displayName ??
+        authUser?.displayName ??
+        authUser?.email?.split("@")[0] ??
+        "";
 
 
     return (
-        <View style={{ flex: 1, padding: 16, backgroundColor: '#f9fafb' }}>
-            <Stack.Screen
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+            <StatusBar barStyle="light-content" />
+            {/* <Stack.Screen
                 options={{
-                    headerShown: true,
-                    title: 'Mis proyectos',
+                    headerShown: false,
+                    title: "GastosApp",
+                    headerStyle: { backgroundColor: colors.bg },
+                    headerTintColor: colors.text,
+                    headerTitleStyle: { color: colors.text, fontWeight: "800" },
                     headerRight: () => (
-                        <Pressable onPress={onLogout} style={{ paddingHorizontal: 8, paddingVertical: 6 }}>
-                            <Text style={{ color: '#ef4444', fontWeight: '600' }}>Salir</Text>
+                        <Pressable
+                            onPress={onLogout}
+                            style={({ pressed }) => ({
+                                paddingHorizontal: 10,
+                                paddingVertical: 6,
+                                opacity: pressed ? 0.7 : 1,
+                            })}
+                        >
+                            <Ionicons name="exit-outline" size={22} color={colors.text} />
                         </Pressable>
                     ),
                 }}
-            />
+            /> */}
 
+            <AppHeader onPressRight={onLogout} />
 
-            <Pressable
-                onPress={() => setShowModal(true)}
-                style={({ pressed }) => ({
-                    opacity: pressed ? 0.7 : 1,
-                    backgroundColor: '#111827',
-                    paddingVertical: 14,
-                    borderRadius: 12,
-                    alignItems: 'center',
-                    marginBottom: 16,
-                })}
-            >
-                <Text style={{ color: 'white', fontWeight: '600' }}>Crear proyecto</Text>
-            </Pressable>
+            <GreetingBar name={displayName} />
 
-            <Pressable
-                onPress={() => router.push('/join')}
-                style={({ pressed }) => ({
-                    opacity: pressed ? 0.7 : 1,
-                    backgroundColor: '#ffffff',
-                    paddingVertical: 12,
-                    borderRadius: 12,
-                    alignItems: 'center',
-                    marginBottom: 16,
-                    borderWidth: 1, borderColor: '#e5e7eb',
-                })}
-            >
-                <Text style={{ fontWeight: '600' }}>Unirme por código</Text>
-            </Pressable>
+            <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, flex: 1 }}>
+                {/* Acciones superiores */}
+                <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md }}>
+                    <Pressable
+                        onPress={() => router.push("/join")}
+                        style={({ pressed }) => ({
+                            flex: 1,
+                            backgroundColor: colors.card,
+                            paddingVertical: 12,
+                            borderRadius: radius.lg,
+                            alignItems: "center",
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            opacity: pressed ? 0.85 : 1,
+                        })}
+                    >
+                        <Text style={{ color: colors.text, fontWeight: "700" }}>Unirme por código</Text>
+                    </Pressable>
+                </View>
 
+                <FlatList
+                    data={mergedProjects}
+                    keyExtractor={(it) => it.id}
+                    renderItem={renderItem}
+                    contentContainerStyle={{ paddingBottom: 120 }}
+                    ListEmptyComponent={
+                        <Text style={{ color: colors.textMuted }}>
+                            {storedUser
+                                ? "Todavía no tenés proyectos. Creá el primero arriba."
+                                : "Iniciá sesión para ver tus proyectos."}
+                        </Text>
+                    }
+                />
 
-            <Pressable onPress={reload} style={{ paddingVertical: 8, alignSelf: 'flex-end' }}>
-                <Text style={{ color: '#2563eb' }}>Refrescar (debug)</Text>
-            </Pressable>
+            </View>
 
-            <Text style={{ color: '#6b7280', marginBottom: 8 }}>
-                UID: {authUser?.uid}
-            </Text>
+            {/* FAB “+” con etiqueta */}
+            <FAB onPress={() => setShowModal(true)} label="Crea un proyecto" />
 
-            <FlatList
-                data={items}
-                keyExtractor={(it) => it.id}
-                renderItem={renderProjectCard}
-                ListEmptyComponent={
-                    <Text style={{ color: '#6b7280' }}>
-                        {storedUser ? 'Todavía no tenés proyectos. Creá el primero arriba.' : 'Iniciá sesión para ver tus proyectos.'}
-                    </Text>
-                }
-            />
-
-            {sharedItems.length > 0 && (
-                <>
-                    <Text style={{ fontSize: 16, fontWeight: '700', marginTop: 24, marginBottom: 8 }}>
-                        Compartidos conmigo
-                    </Text>
-                    <FlatList
-                        data={sharedItems.filter(s => !items.some(o => o.id === s.id))} // evita duplicados si sos owner
-                        keyExtractor={(it) => it.id}
-                        renderItem={renderProjectCard}
-                        ListEmptyComponent={null}
-                    />
-                </>
-            )}
-
-
-
+            {/* Modal dark para crear proyecto (con selector de emoji) */}
             <Modal visible={showModal} transparent animationType="slide">
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
-                    <View style={{ backgroundColor: 'white', padding: 16, borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
-                        <Text style={{ fontSize: 18, fontWeight: '700', marginBottom: 12 }}>Nuevo proyecto</Text>
+                <View
+                    style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.55)",
+                        justifyContent: "flex-end",
+                    }}
+                >
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            padding: spacing.lg,
+                            borderTopLeftRadius: radius.xl,
+                            borderTopRightRadius: radius.xl,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                        }}
+                    >
+                        <Text
+                            style={{
+                                color: colors.text,
+                                fontSize: 18,
+                                fontWeight: "800",
+                                marginBottom: spacing.md,
+                            }}
+                        >
+                            Nuevo proyecto
+                        </Text>
 
-                        <Text style={{ marginBottom: 6 }}>Nombre</Text>
+                        {/* Selector de icono */}
+                        <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Icono</Text>
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.md }}>
+                            {EMOJI_CHOICES.map((e) => {
+                                const selected = iconEmoji === e;
+                                return (
+                                    <Pressable
+                                        key={e}
+                                        onPress={() => setIconEmoji(e)}
+                                        style={{
+                                            width: 44,
+                                            height: 44,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            backgroundColor: selected ? colors.cardAlt : "transparent",
+                                            borderWidth: 1,
+                                            borderColor: selected ? colors.primary : colors.border,
+                                        }}
+                                    >
+                                        <Text style={{ fontSize: 22 }}>{e}</Text>
+                                    </Pressable>
+                                );
+                            })}
+                        </View>
+
+                        <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Nombre</Text>
                         <TextInput
                             value={name}
                             onChangeText={setName}
                             placeholder="Hogar 2025"
-                            style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, marginBottom: 12 }}
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: 12,
+                                padding: 12,
+                                marginBottom: spacing.md,
+                            }}
                         />
 
-                        <Text style={{ marginBottom: 6 }}>Moneda</Text>
+                        <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Moneda</Text>
                         <TextInput
                             value={currency}
                             onChangeText={setCurrency}
                             placeholder="ARS"
                             autoCapitalize="characters"
-                            style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, marginBottom: 16 }}
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: 12,
+                                padding: 12,
+                                marginBottom: spacing.lg,
+                            }}
                         />
 
-                        <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <View style={{ flexDirection: "row", gap: spacing.sm }}>
                             <Pressable
                                 onPress={() => setShowModal(false)}
                                 style={({ pressed }) => ({
-                                    flex: 1, opacity: pressed ? 0.7 : 1, paddingVertical: 12,
-                                    borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb',
+                                    flex: 1,
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    backgroundColor: colors.cardAlt,
+                                    opacity: pressed ? 0.85 : 1,
                                 })}
                             >
-                                <Text>Cancelar</Text>
+                                <Text style={{ color: colors.text }}>Cancelar</Text>
                             </Pressable>
 
                             <Pressable
                                 onPress={onCreate}
                                 disabled={!canCreate}
                                 style={({ pressed }) => ({
-                                    flex: 1, opacity: (!canCreate || pressed) ? 0.6 : 1, paddingVertical: 12,
-                                    borderRadius: 10, alignItems: 'center', backgroundColor: '#111827',
+                                    flex: 1,
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    backgroundColor: colors.primary,
+                                    opacity: !canCreate || pressed ? 0.6 : 1,
                                 })}
                             >
-                                <Text style={{ color: 'white', fontWeight: '600' }}>Crear</Text>
+                                <Text style={{ color: "white", fontWeight: "700" }}>Crear</Text>
                             </Pressable>
                         </View>
                     </View>
                 </View>
             </Modal>
-        </View>
+        </SafeAreaView>
     );
+
 }

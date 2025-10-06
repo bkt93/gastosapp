@@ -1,6 +1,6 @@
 // src/services/projects.members.read.ts
 import {
-    collectionGroup, doc, onSnapshot, query, Unsubscribe, where,
+  collectionGroup, doc, onSnapshot, query, Unsubscribe, where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { ProjectListItem } from './projects.read';
@@ -43,7 +43,8 @@ export function subscribeSharedProjectsByUid(
             id,
             name: v.name ?? 'Proyecto',
             currency: v.currency ?? 'ARS',
-            role: 'member',         
+            role: 'member', 
+            iconEmoji: v.iconEmoji ?? undefined,        
           });
           emit();
         });

@@ -257,13 +257,31 @@ export default function ProjectTemplateScreen() {
                     ) : null}
 
                     <Link
-                        href={{ pathname: "/expenses", params: { projectId: String(projectId) } }} 
+                        href={{ pathname: "/expenses", params: { projectId: String(projectId) } }}
                         asChild
                     >
                         <Pressable style={{ padding: 12, borderRadius: 10, backgroundColor: "#0ea5e9" }}>
                             <Text style={{ color: "#fff", fontWeight: "700" }}>Gastos del hogar</Text>
                         </Pressable>
                     </Link>
+
+                    <Link
+                        href={{ pathname: "/services", params: { projectId: String(projectId) } }}
+                        asChild
+                    >
+                        <Pressable
+                            style={{
+                                marginTop: 10,
+                                backgroundColor: "#2563eb",
+                                paddingVertical: 12,
+                                paddingHorizontal: 16,
+                                borderRadius: 10,
+                            }}
+                        >
+                            <Text style={{ color: "#fff", fontWeight: "700" }}>Servicios</Text>
+                        </Pressable>
+                    </Link>
+
 
                 </>
             ) : (

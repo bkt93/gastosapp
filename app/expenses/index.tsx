@@ -9,6 +9,7 @@ import {
     View,
 } from "react-native";
 import { useMonthExpenses } from "../../hooks/useMonthExpenses";
+import ProjectTabs from "../../src/components/ProjectTabs";
 import {
     subscribeProjectMembers,
     type ProjectMember,
@@ -49,7 +50,11 @@ export default function ExpensesIndex() {
     const router = useRouter();
 
     return (
+
         <View style={{ flex: 1, padding: 16, gap: 12 }}>
+
+            <ProjectTabs projectId={String(projectId)} current="expenses" />
+
             <View
                 style={{
                     flexDirection: "row",
