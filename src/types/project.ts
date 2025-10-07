@@ -26,8 +26,8 @@ export interface ProjectMember {
 export interface Invite {
   id: string;
   projectId: string;
-  code: string;       // p.ej. "A7P9KQ"
-  createdBy: string;  // ownerUid
+  code: string;       
+  createdBy: string;  
   status: InviteStatus;
   createdAt: Timestamp;
   expiresAt: Timestamp;

@@ -1,7 +1,7 @@
 // app/home.tsx
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -16,8 +16,9 @@ import {
 import { clearUser, getStoredUser, type StoredUser } from "../src/auth-storage";
 import { auth } from "../src/firebase";
 import { createProject } from "../src/services/projects";
-import { subscribeSharedProjectsByUid } from "../src/services/projects.members.read";
+import { fetchSharedProjectsOnce, subscribeSharedProjectsByUid } from "../src/services/projects.members.read";
 import {
+    fetchOwnedProjectsOnce,
     subscribeOwnedProjectsByUid,
     type ProjectListItem
 } from "../src/services/projects.read";
@@ -88,6 +89,27 @@ export default function HomeScreen() {
         const unsub = subscribeSharedProjectsByUid(authUser.uid, setSharedItems);
         return () => unsub && unsub();
     }, [authReady, authUser?.uid]);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (!authReady || !authUser?.uid) return;
+
+            // refresco “instantáneo” al volver a Home
+            (async () => {
+                try {
+                    const [owned, shared] = await Promise.all([
+                        fetchOwnedProjectsOnce(authUser.uid),
+                        fetchSharedProjectsOnce(authUser.uid),
+                    ]);
+                    setItems(owned);
+                    setSharedItems(shared);
+                } catch (e) {
+                    console.log("focus refresh error:", e);
+                }
+            })();
+        }, [authReady, authUser?.uid])
+    );
+
 
     const onCreate = async () => {
         try {

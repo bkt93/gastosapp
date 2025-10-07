@@ -13,7 +13,7 @@ export default function JoinScreen() {
     try {
       const projectId = await acceptInviteByCode(normalized);
       Alert.alert('¡Listo!', 'Te uniste al proyecto', [
-        { text: 'Ir al proyecto', onPress: () => router.replace(`/projects/${projectId}`) },
+        { text: 'Ir al proyecto', onPress: () => router.replace(`/home`) },
       ]);
     } catch (e: any) {
       Alert.alert('No se pudo unir', e?.message ?? 'Verificá el código e intentá de nuevo');
