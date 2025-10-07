@@ -1,57 +1,216 @@
 // app/projects/[projectId].tsx
-import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
-import { Alert, Modal, Pressable, Share, Text, TextInput, View } from 'react-native';
-import { auth, db } from '../../src/firebase';
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { doc, onSnapshot } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    Modal,
+    Pressable,
+    Share,
+    StatusBar,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { auth, db } from "../../src/firebase";
+
 import {
     generateInvite,
     revokeInvite,
     subscribePendingInvites,
     type PendingInvite,
-} from '../../src/services/invites';
-import { subscribeProjectMembers, type ProjectMember } from '../../src/services/members.read';
-import { deleteProjectDeep, updateProject } from '../../src/services/projects';
+} from "../../src/services/invites";
 
+import {
+    subscribeProjectMembers,
+    type ProjectMember,
+} from "../../src/services/members.read";
 
-type ProjectDoc = { name: string; currency: string; ownerUid: string };
+import { deleteProjectDeep, updateProject } from "../../src/services/projects";
 
-export default function ProjectTemplateScreen() {
+import AppHeader from "../../src/components/AppHeader";
+import { colors, radius, spacing } from "../../src/theme";
+
+// KPIs
+import { listenMonthExpenses } from "../../src/services/expenses";
+import { listenPendingServices } from "../../src/services/services";
+import { toYearMonth } from "../../src/utils/date";
+
+// ---------------- FeatureTile (interno para este screen) ----------------
+function FeatureTile({
+    icon,
+    title,
+    subtitle,
+    onPress,
+}: {
+    icon?: string;
+    title: string;
+    subtitle?: string;
+    onPress?: () => void;
+}) {
+    return (
+        <Pressable
+            onPress={onPress}
+            style={({ pressed }) => ({
+                backgroundColor: colors.card,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: colors.border,
+                paddingVertical: spacing.lg,
+                paddingHorizontal: spacing.lg,
+                opacity: pressed ? 0.92 : 1,
+            })}
+        >
+            <View
+                style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                }}
+            >
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    {!!icon && <Text style={{ fontSize: 28, marginRight: 10 }}>{icon}</Text>}
+                    <Text style={{ color: colors.text, fontSize: 16, fontWeight: "800" }}>
+                        {title}
+                    </Text>
+                </View>
+                <Text style={{ color: colors.textMuted, fontSize: 22, marginLeft: 8 }}>›</Text>
+            </View>
+
+            {!!subtitle && (
+                <Text style={{ color: colors.textMuted, marginTop: 6 }}>{subtitle}</Text>
+            )}
+        </Pressable>
+    );
+}
+// ------------------------------------------------------------------------
+
+type ProjectDoc = {
+    name: string;
+    currency: string;
+    ownerUid: string;
+    iconEmoji?: string;
+};
+
+// Alias local con displayName opcional
+type PM = ProjectMember & { displayName?: string | null };
+
+export default function ProjectScreen() {
     const { projectId } = useLocalSearchParams<{ projectId: string }>();
     const router = useRouter();
 
     const [project, setProject] = useState<ProjectDoc | null>(null);
     const [loadErr, setLoadErr] = useState<string | null>(null);
+
     const [authUser, setAuthUser] = useState<User | null>(null);
     const isOwner = !!authUser?.uid && project?.ownerUid === authUser.uid;
 
+    // edición
     const [editOpen, setEditOpen] = useState(false);
-    const [name, setName] = useState('');
-    const [currency, setCurrency] = useState('ARS');
+    const [name, setName] = useState("");
+    const [currency, setCurrency] = useState("ARS");
 
-    // Invites
+    // modales nuevos
+    const [membersOpen, setMembersOpen] = useState(false);
+    const [invitesOpen, setInvitesOpen] = useState(false);
+
+    // invites
     const [pending, setPending] = useState<PendingInvite[]>([]);
     const currentInvite = pending[0] ?? null;
 
-    const [members, setMembers] = useState<ProjectMember[]>([]);
+    // miembros
+    const [members, setMembers] = useState<PM[]>([]);
+
+    // KPIs
+    const [monthTotalCents, setMonthTotalCents] = useState(0);
+    const [pendingCount, setPendingCount] = useState(0);
+    const [nextDue, setNextDue] = useState<Date | null>(null);
 
     useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, setAuthUser);
         return () => unsubAuth();
     }, []);
 
-    // Suscripción a invites pendientes (owner)
+    // Proyecto
+    useEffect(() => {
+        if (!projectId) return;
+        const unsub = onSnapshot(
+            doc(db, "projects", String(projectId)),
+            (snap) => {
+                const d = snap.data() as any;
+                if (d) {
+                    setProject({
+                        name: d.name,
+                        currency: d.currency,
+                        ownerUid: d.ownerUid,
+                        iconEmoji: d.iconEmoji,
+                    });
+                    setLoadErr(null);
+                } else {
+                    setLoadErr("Proyecto no encontrado");
+                }
+            },
+            (err) => {
+                console.log("project onSnapshot error:", err);
+                setLoadErr("No tenés permiso para ver este proyecto o fue eliminado.");
+            }
+        );
+        return () => unsub();
+    }, [projectId]);
+
+    // Miembros
+    useEffect(() => {
+        if (!projectId) return;
+        const unsub = subscribeProjectMembers(String(projectId), (rows: PM[]) => {
+            setMembers(rows);
+        });
+        return () => unsub();
+    }, [projectId]);
+
+    // Invites
     useEffect(() => {
         if (!projectId) return;
         const unsub = subscribePendingInvites(String(projectId), (rows) => {
-            // ordenamos por fecha de expiración (más reciente primero)
-            const sorted = [...rows].sort((a, b) => b.expiresAt.getTime() - a.expiresAt.getTime());
+            const sorted = [...rows].sort(
+                (a, b) => b.expiresAt.getTime() - a.expiresAt.getTime()
+            );
             setPending(sorted);
         });
         return () => unsub();
     }, [projectId]);
 
+    // KPIs: gastos del mes actual
+    useEffect(() => {
+        if (!projectId) return;
+        const ym = toYearMonth(new Date());
+        const unsub = listenMonthExpenses(String(projectId), ym, (rows) => {
+            const total = rows.reduce((acc, it) => acc + (it.amountCents ?? 0), 0);
+            setMonthTotalCents(total);
+        });
+        return () => unsub && unsub();
+    }, [projectId]);
+
+    // KPIs: servicios pendientes
+    useEffect(() => {
+        if (!projectId) return;
+        const unsub = listenPendingServices(String(projectId), (rows) => {
+            setPendingCount(rows.length);
+            if (rows.length > 0) {
+                const sorted = [...rows].sort(
+                    (a, b) => a.dueDate.getTime() - b.dueDate.getTime()
+                );
+                setNextDue(sorted[0].dueDate);
+            } else {
+                setNextDue(null);
+            }
+        });
+        return () => unsub && unsub();
+    }, [projectId]);
+
+    // ------- acciones -------
     const openEdit = () => {
         if (!project) return;
         setName(project.name);
@@ -61,28 +220,32 @@ export default function ProjectTemplateScreen() {
 
     const saveEdit = async () => {
         try {
-            await updateProject(String(projectId), { name: name.trim(), currency: currency.trim() });
-            setEditOpen(false);
+            await updateProject(String(projectId), {
+                name: name.trim(),
+                currency: currency.trim(),
+            });
         } catch (e: any) {
-            Alert.alert('Error', e?.message ?? 'No se pudo actualizar');
+            Alert.alert("Error", e?.message ?? "No se pudo actualizar");
+        } finally {
+            setEditOpen(false);
         }
     };
 
     const confirmDelete = () => {
         Alert.alert(
-            'Eliminar proyecto',
-            'Esta acción no se puede deshacer. ¿Querés eliminar el proyecto y sus invitaciones/miembros?',
+            "Eliminar proyecto",
+            "Esta acción no se puede deshacer. ¿Querés eliminar el proyecto y sus invitaciones/miembros?",
             [
-                { text: 'Cancelar', style: 'cancel' },
+                { text: "Cancelar", style: "cancel" },
                 {
-                    text: 'Eliminar',
-                    style: 'destructive',
+                    text: "Eliminar",
+                    style: "destructive",
                     onPress: async () => {
                         try {
                             await deleteProjectDeep(String(projectId));
-                            router.replace('/home');
+                            router.replace("/home");
                         } catch (e: any) {
-                            Alert.alert('Error', e?.message ?? 'No se pudo eliminar');
+                            Alert.alert("Error", e?.message ?? "No se pudo eliminar");
                         }
                     },
                 },
@@ -90,12 +253,11 @@ export default function ProjectTemplateScreen() {
         );
     };
 
-    // Invites: acciones
     const onGenerate = async () => {
         try {
             await generateInvite(String(projectId));
         } catch (e: any) {
-            Alert.alert('Invitar', e?.message ?? 'No se pudo generar la invitación');
+            Alert.alert("Invitar", e?.message ?? "No se pudo generar la invitación");
         }
     };
 
@@ -115,218 +277,611 @@ export default function ProjectTemplateScreen() {
         try {
             await revokeInvite(currentInvite.id);
         } catch (e: any) {
-            Alert.alert('Invitar', e?.message ?? 'No se pudo revocar la invitación');
+            Alert.alert("Invitar", e?.message ?? "No se pudo revocar la invitación");
         }
     };
 
-    useEffect(() => {
-        if (!projectId) return;
-        const unsub = onSnapshot(
-            doc(db, 'projects', String(projectId)),
-            (snap) => {
-                const d = snap.data() as any;
-                if (d) {
-                    setProject({ name: d.name, currency: d.currency, ownerUid: d.ownerUid });
-                    setLoadErr(null);
-                } else {
-                    setLoadErr('Proyecto no encontrado');
-                }
-            },
-            (err) => {
-                console.log('project onSnapshot error:', err);
-                setLoadErr('No tenés permiso para ver este proyecto o fue eliminado.');
-            }
-        );
-        return () => unsub();
-    }, [projectId]);
+    // helpers visuales
+    const roleBadge = useMemo(() => {
+        const label = isOwner ? "Propietario" : "Miembro";
+        const bg = colors.cardAlt;
+        const border = colors.border;
+        const text = colors.textMuted;
+        return { label, bg, border, text };
+    }, [isOwner]);
 
-    useEffect(() => {
-        if (!projectId) return;
-        const unsub = subscribeProjectMembers(String(projectId), setMembers);
-        return () => unsub();
-    }, [projectId]);
+    const currencyCode = project?.currency || "ARS";
+    const monthSubtitle = useMemo(() => {
+        try {
+            const formatted = new Intl.NumberFormat("es-AR", {
+                style: "currency",
+                currency: currencyCode,
+                maximumFractionDigits: 2,
+            }).format(monthTotalCents / 100);
+            return `Total mes: ${formatted}`;
+        } catch {
+            return `Total mes: ${currencyCode} ${(monthTotalCents / 100).toFixed(2)}`;
+        }
+    }, [monthTotalCents, currencyCode]);
+
+    const servicesSubtitle = useMemo(() => {
+        const base = `${pendingCount} pendiente${pendingCount === 1 ? "" : "s"}`;
+        return nextDue
+            ? `${base} · Próximo: ${nextDue.toLocaleDateString()}`
+            : base;
+    }, [pendingCount, nextDue]);
 
     return (
-        <View style={{ flex: 1, padding: 16, backgroundColor: '#f9fafb' }}>
-            <Stack.Screen options={{ title: project?.name ?? 'Proyecto' }} />
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+            <StatusBar barStyle="light-content" />
+            <AppHeader />
 
-            {loadErr ? <Text style={{ color: '#ef4444' }}>{loadErr}</Text> : null}
+            <View
+                style={{
+                    flex: 1,
+                    paddingHorizontal: spacing.lg,
+                    paddingTop: spacing.md,
+                }}
+            >
+                {/* Loading / Error */}
+                {!project && !loadErr ? (
+                    <View
+                        style={{
+                            flex: 1,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 8,
+                        }}
+                    >
+                        <ActivityIndicator color={colors.text} />
+                        <Text style={{ color: colors.textMuted }}>Cargando…</Text>
+                    </View>
+                ) : null}
 
-            {project && !loadErr ? (
-                <>
-                    {/* Header con badge */}
-                    <View style={{ marginBottom: 8 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ fontSize: 22, fontWeight: '700' }}>{project.name}</Text>
+                {loadErr ? (
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            borderRadius: radius.lg,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            padding: spacing.lg,
+                        }}
+                    >
+                        <Text style={{ color: colors.danger, fontWeight: "700" }}>
+                            {loadErr}
+                        </Text>
+                    </View>
+                ) : null}
 
-                            <View style={{
-                                paddingHorizontal: 8, paddingVertical: 4, borderRadius: 9999,
-                                backgroundColor: isOwner ? '#E5F2FF' : '#F1F5F9',
-                                borderWidth: 1, borderColor: isOwner ? '#93C5FD' : '#CBD5E1',
-                            }}>
-                                <Text style={{
-                                    fontSize: 12, fontWeight: '700',
-                                    color: isOwner ? '#1D4ED8' : '#334155'
-                                }}>
-                                    {isOwner ? 'Propietario' : 'Miembro'}
-                                </Text>
+                {project && !loadErr ? (
+                    <>
+                        {/* Header del proyecto */}
+                        <View
+                            style={{
+                                backgroundColor: colors.card,
+                                borderRadius: radius.lg,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                padding: spacing.lg,
+                                marginBottom: spacing.md,
+                            }}
+                        >
+                            <View
+                                style={{
+                                    flexDirection: "row",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                }}
+                            >
+                                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                                    {!!project.iconEmoji && (
+                                        <Text style={{ fontSize: 26, marginRight: 8 }}>
+                                            {project.iconEmoji}
+                                        </Text>
+                                    )}
+                                    <Text
+                                        style={{
+                                            color: colors.text,
+                                            fontSize: 20,
+                                            fontWeight: "800",
+                                        }}
+                                    >
+                                        {project.name}
+                                    </Text>
+                                </View>
+
+                                <View
+                                    style={{
+                                        paddingHorizontal: 10,
+                                        paddingVertical: 4,
+                                        borderRadius: 999,
+                                        backgroundColor: roleBadge.bg,
+                                        borderWidth: 1,
+                                        borderColor: roleBadge.border,
+                                    }}
+                                >
+                                    <Text
+                                        style={{
+                                            color: roleBadge.text,
+                                            fontSize: 12,
+                                            fontWeight: "700",
+                                        }}
+                                    >
+                                        {roleBadge.label}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <Text style={{ color: colors.textMuted, marginTop: 6 }}>
+                                Moneda: {project.currency}
+                            </Text>
+
+                            {/* Fila 1 (acciones owner) */}
+                            {isOwner ? (
+                                <View
+                                    style={{
+                                        flexDirection: "row",
+                                        gap: spacing.sm,
+                                        marginTop: spacing.md,
+                                    }}
+                                >
+                                    <Pressable
+                                        onPress={openEdit}
+                                        style={({ pressed }) => ({
+                                            flex: 1,
+                                            paddingVertical: 12,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            backgroundColor: colors.cardAlt,
+                                            borderWidth: 1,
+                                            borderColor: colors.border,
+                                            opacity: pressed ? 0.85 : 1,
+                                        })}
+                                    >
+                                        <Text style={{ color: colors.text, fontWeight: "700" }}>
+                                            Editar
+                                        </Text>
+                                    </Pressable>
+
+                                    <Pressable
+                                        onPress={confirmDelete}
+                                        style={({ pressed }) => ({
+                                            flex: 1,
+                                            paddingVertical: 12,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            borderWidth: 1,
+                                            borderColor: colors.danger,
+                                            backgroundColor: "transparent",
+                                            opacity: pressed ? 0.85 : 1,
+                                        })}
+                                    >
+                                        <Text style={{ color: colors.danger, fontWeight: "700" }}>
+                                            Eliminar
+                                        </Text>
+                                    </Pressable>
+                                </View>
+                            ) : null}
+
+                            {/* Fila 2 (modales: miembros + invitaciones) */}
+                            <View
+                                style={{
+                                    flexDirection: "row",
+                                    gap: spacing.sm,
+                                    marginTop: spacing.sm,
+                                }}
+                            >
+                                <Pressable
+                                    onPress={() => setMembersOpen(true)}
+                                    style={({ pressed }) => ({
+                                        flex: isOwner ? 1 : 1,
+                                        paddingVertical: 12,
+                                        borderRadius: 12,
+                                        alignItems: "center",
+                                        backgroundColor: colors.cardAlt,
+                                        borderWidth: 1,
+                                        borderColor: colors.border,
+                                        opacity: pressed ? 0.85 : 1,
+                                    })}
+                                >
+                                    <Text style={{ color: colors.text, fontWeight: "700" }}>
+                                        👥 Miembros
+                                    </Text>
+                                </Pressable>
+
+                                {isOwner ? (
+                                    <Pressable
+                                        onPress={() => setInvitesOpen(true)}
+                                        style={({ pressed }) => ({
+                                            flex: 1,
+                                            paddingVertical: 12,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            backgroundColor: colors.cardAlt,
+                                            borderWidth: 1,
+                                            borderColor: colors.border,
+                                            opacity: pressed ? 0.85 : 1,
+                                        })}
+                                    >
+                                        <Text style={{ color: colors.text, fontWeight: "700" }}>
+                                            ✉️ Invitaciones
+                                        </Text>
+                                    </Pressable>
+                                ) : null}
                             </View>
                         </View>
 
-                        <Text style={{ color: '#6b7280', marginTop: 6 }}>
-                            Moneda: {project.currency}
-                        </Text>
-                    </View>
-
-                    {/* Acciones Owner */}
-                    {isOwner ? (
-                        <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
-                            <Pressable onPress={openEdit} style={{ backgroundColor: '#111827', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 }}>
-                                <Text style={{ color: 'white', fontWeight: '600' }}>Editar</Text>
-                            </Pressable>
-                            <Pressable onPress={confirmDelete} style={{ borderColor: '#ef4444', borderWidth: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 }}>
-                                <Text style={{ color: '#ef4444', fontWeight: '600' }}>Eliminar</Text>
-                            </Pressable>
+                        {/* Feature Tiles */}
+                        <View style={{ flexDirection: "column", gap: spacing.sm }}>
+                            <FeatureTile
+                                icon="💸"
+                                title="Gastos"
+                                subtitle={monthSubtitle}
+                                onPress={() =>
+                                    router.push({
+                                        pathname: "/expenses",
+                                        params: { projectId: String(projectId) },
+                                    })
+                                }
+                            />
+                            <FeatureTile
+                                icon="💡"
+                                title="Servicios"
+                                subtitle={servicesSubtitle}
+                                onPress={() =>
+                                    router.push({
+                                        pathname: "/services",
+                                        params: { projectId: String(projectId) },
+                                    })
+                                }
+                            />
                         </View>
-                    ) : null}
+                    </>
+                ) : null}
+            </View>
 
-                    {/* Sección Invitar (solo owner) */}
-                    {isOwner ? (
-                        <View style={{ marginTop: 24, backgroundColor: 'white', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
-                            <Text style={{ fontWeight: '700', marginBottom: 8 }}>Invitar</Text>
-
-                            {currentInvite ? (
-                                <>
-                                    <Text style={{ marginBottom: 6 }}>Código vigente:</Text>
-                                    <Text style={{ fontSize: 20, fontWeight: '800', letterSpacing: 2, marginBottom: 8 }}>
-                                        {currentInvite.code}
-                                    </Text>
-                                    <Text style={{ color: '#6b7280', marginBottom: 12 }}>
-                                        Expira: {currentInvite.expiresAt.toLocaleDateString()} {currentInvite.expiresAt.toLocaleTimeString()}
-                                    </Text>
-
-                                    <View style={{ flexDirection: 'row', gap: 12 }}>
-                                        <Pressable onPress={onShare} style={{ flex: 1, backgroundColor: '#111827', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}>
-                                            <Text style={{ color: 'white', fontWeight: '600' }}>Compartir</Text>
-                                        </Pressable>
-                                        <Pressable onPress={onRevoke} style={{ flex: 1, borderWidth: 1, borderColor: '#ef4444', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}>
-                                            <Text style={{ color: '#ef4444', fontWeight: '600' }}>Revocar</Text>
-                                        </Pressable>
-                                    </View>
-                                </>
-                            ) : (
-                                <>
-                                    <Text style={{ color: '#6b7280', marginBottom: 12 }}>
-                                        No hay invitaciones pendientes. Generá un código nuevo.
-                                    </Text>
-                                    <Pressable onPress={onGenerate} style={{ backgroundColor: '#111827', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}>
-                                        <Text style={{ color: 'white', fontWeight: '600' }}>Generar invitación</Text>
-                                    </Pressable>
-                                </>
-                            )}
-                        </View>
-                    ) : null}
-
-                    {/* Sección Miembros (solo owner) */}
-                    {isOwner ? (
-                        <View style={{ marginTop: 24, backgroundColor: 'white', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e5e7eb' }}>
-                            <Text style={{ fontWeight: '700', marginBottom: 8 }}>Miembros</Text>
-
-                            {members.length === 0 ? (
-                                <Text style={{ color: '#6b7280' }}>No hay miembros aún.</Text>
-                            ) : (
-                                members.map(m => (
-                                    <View key={m.uid} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
-                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <Text style={{ fontWeight: '600' }}>
-                                                {m.uid}{m.uid === authUser?.uid ? ' (vos)' : ''}
-                                            </Text>
-                                            <Text style={{ fontSize: 12, color: '#64748b' }}>
-                                                {m.role === 'owner' ? 'Propietario' : 'Miembro'}
-                                            </Text>
-                                        </View>
-                                        {m.joinedAt && (
-                                            <Text style={{ color: '#94a3b8', marginTop: 2 }}>
-                                                Se unió: {m.joinedAt.toLocaleDateString()} {m.joinedAt.toLocaleTimeString()}
-                                            </Text>
-                                        )}
-                                    </View>
-                                ))
-                            )}
-                        </View>
-                    ) : null}
-
-                    <Link
-                        href={{ pathname: "/expenses", params: { projectId: String(projectId) } }}
-                        asChild
+            {/* Modal Editar (dark) */}
+            <Modal visible={editOpen} transparent animationType="slide">
+                <View
+                    style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.55)",
+                        justifyContent: "flex-end",
+                    }}
+                >
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            padding: spacing.lg,
+                            borderTopLeftRadius: radius.xl,
+                            borderTopRightRadius: radius.xl,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                        }}
                     >
-                        <Pressable style={{ padding: 12, borderRadius: 10, backgroundColor: "#0ea5e9" }}>
-                            <Text style={{ color: "#fff", fontWeight: "700" }}>Gastos del hogar</Text>
-                        </Pressable>
-                    </Link>
-
-                    <Link
-                        href={{ pathname: "/services", params: { projectId: String(projectId) } }}
-                        asChild
-                    >
-                        <Pressable
+                        <Text
                             style={{
-                                marginTop: 10,
-                                backgroundColor: "#2563eb",
-                                paddingVertical: 12,
-                                paddingHorizontal: 16,
-                                borderRadius: 10,
+                                color: colors.text,
+                                fontSize: 18,
+                                fontWeight: "800",
+                                marginBottom: spacing.md,
                             }}
                         >
-                            <Text style={{ color: "#fff", fontWeight: "700" }}>Servicios</Text>
-                        </Pressable>
-                    </Link>
+                            Editar proyecto
+                        </Text>
 
-
-                </>
-            ) : (
-                <Text>Cargando…</Text>
-            )}
-
-            {/* Modal Editar */}
-            <Modal visible={editOpen} transparent animationType="slide">
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
-                    <View style={{ backgroundColor: 'white', padding: 16, borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
-                        <Text style={{ fontSize: 18, fontWeight: '700', marginBottom: 12 }}>Editar proyecto</Text>
-
-                        <Text style={{ marginBottom: 6 }}>Nombre</Text>
+                        <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Nombre</Text>
                         <TextInput
                             value={name}
                             onChangeText={setName}
-                            style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, marginBottom: 12 }}
+                            placeholder="Mi hogar"
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: 12,
+                                padding: 12,
+                                marginBottom: spacing.md,
+                            }}
                         />
 
-                        <Text style={{ marginBottom: 6 }}>Moneda</Text>
+                        <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Moneda</Text>
                         <TextInput
                             value={currency}
                             onChangeText={setCurrency}
                             autoCapitalize="characters"
-                            style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, marginBottom: 16 }}
+                            placeholder="ARS"
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: 12,
+                                padding: 12,
+                                marginBottom: spacing.lg,
+                            }}
                         />
 
-                        <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <View style={{ flexDirection: "row", gap: spacing.sm }}>
                             <Pressable
                                 onPress={() => setEditOpen(false)}
-                                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' }}
+                                style={({ pressed }) => ({
+                                    flex: 1,
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    backgroundColor: colors.cardAlt,
+                                    opacity: pressed ? 0.85 : 1,
+                                })}
                             >
-                                <Text>Cancelar</Text>
+                                <Text style={{ color: colors.text }}>Cancelar</Text>
                             </Pressable>
+
                             <Pressable
                                 onPress={saveEdit}
-                                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', backgroundColor: '#111827' }}
+                                style={({ pressed }) => ({
+                                    flex: 1,
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    backgroundColor: colors.primary,
+                                    opacity: pressed ? 0.85 : 1,
+                                })}
                             >
-                                <Text style={{ color: 'white', fontWeight: '600' }}>Guardar</Text>
+                                <Text style={{ color: "white", fontWeight: "700" }}>Guardar</Text>
                             </Pressable>
                         </View>
                     </View>
                 </View>
             </Modal>
-        </View>
-    );
 
+            {/* Modal Miembros */}
+            <Modal visible={membersOpen} transparent animationType="slide">
+                <View
+                    style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.55)",
+                        justifyContent: "flex-end",
+                    }}
+                >
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            padding: spacing.lg,
+                            borderTopLeftRadius: radius.xl,
+                            borderTopRightRadius: radius.xl,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            maxHeight: "80%",
+                        }}
+                    >
+                        <Text
+                            style={{
+                                color: colors.text,
+                                fontSize: 18,
+                                fontWeight: "800",
+                                marginBottom: spacing.md,
+                            }}
+                        >
+                            Miembros del proyecto
+                        </Text>
+
+                        {members.length === 0 ? (
+                            <Text style={{ color: colors.textMuted }}>No hay miembros aún.</Text>
+                        ) : (
+                            <View>
+                                {members
+                                    .slice()
+                                    .sort(
+                                        (a, b) =>
+                                            (a.role === "owner" ? -1 : 1) -
+                                            (b.role === "owner" ? -1 : 1) ||
+                                            (a.displayName ?? "").localeCompare(b.displayName ?? "")
+                                    )
+                                    .map((m) => {
+                                        const isSelf = m.uid === authUser?.uid;
+                                        const name = m.displayName?.trim() || m.uid.slice(0, 6) + "…";
+                                        return (
+                                            <View
+                                                key={m.uid}
+                                                style={{
+                                                    paddingVertical: 10,
+                                                    borderBottomWidth: 1,
+                                                    borderBottomColor: colors.border,
+                                                }}
+                                            >
+                                                <View
+                                                    style={{
+                                                        flexDirection: "row",
+                                                        justifyContent: "space-between",
+                                                        alignItems: "center",
+                                                    }}
+                                                >
+                                                    <Text style={{ color: colors.text, fontWeight: "700" }}>
+                                                        {name}
+                                                        {isSelf ? " (vos)" : ""}
+                                                    </Text>
+                                                    <Text
+                                                        style={{
+                                                            color: colors.textMuted,
+                                                            fontSize: 12,
+                                                            fontWeight: "600",
+                                                        }}
+                                                    >
+                                                        {m.role === "owner" ? "Propietario" : "Miembro"}
+                                                    </Text>
+                                                </View>
+                                                {m.joinedAt && (
+                                                    <Text
+                                                        style={{
+                                                            color: colors.textMuted,
+                                                            marginTop: 2,
+                                                            fontSize: 12,
+                                                        }}
+                                                    >
+                                                        Se unió: {m.joinedAt.toLocaleDateString()}{" "}
+                                                        {m.joinedAt.toLocaleTimeString()}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                        );
+                                    })}
+                            </View>
+                        )}
+
+                        <View style={{ marginTop: spacing.lg }}>
+                            <Pressable
+                                onPress={() => setMembersOpen(false)}
+                                style={({ pressed }) => ({
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    backgroundColor: colors.cardAlt,
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    opacity: pressed ? 0.85 : 1,
+                                })}
+                            >
+                                <Text style={{ color: colors.text, fontWeight: "700" }}>Cerrar</Text>
+                            </Pressable>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Modal Invitaciones (solo owner) */}
+            <Modal visible={invitesOpen} transparent animationType="slide">
+                <View
+                    style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.55)",
+                        justifyContent: "flex-end",
+                    }}
+                >
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            padding: spacing.lg,
+                            borderTopLeftRadius: radius.xl,
+                            borderTopRightRadius: radius.xl,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                        }}
+                    >
+                        <Text
+                            style={{
+                                color: colors.text,
+                                fontSize: 18,
+                                fontWeight: "800",
+                                marginBottom: spacing.md,
+                            }}
+                        >
+                            Invitaciones
+                        </Text>
+
+                        {currentInvite ? (
+                            <>
+                                <Text style={{ color: colors.textMuted, marginBottom: 6 }}>
+                                    Código vigente:
+                                </Text>
+                                <Text
+                                    style={{
+                                        color: colors.text,
+                                        fontSize: 22,
+                                        fontWeight: "900",
+                                        letterSpacing: 2,
+                                        marginBottom: 6,
+                                    }}
+                                >
+                                    {currentInvite.code}
+                                </Text>
+                                <Text style={{ color: colors.textMuted, marginBottom: spacing.md }}>
+                                    Expira: {currentInvite.expiresAt.toLocaleDateString()}{" "}
+                                    {currentInvite.expiresAt.toLocaleTimeString()}
+                                </Text>
+
+                                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                                    <Pressable
+                                        onPress={onShare}
+                                        style={({ pressed }) => ({
+                                            flex: 1,
+                                            paddingVertical: 12,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            backgroundColor: colors.primary,
+                                            opacity: pressed ? 0.85 : 1,
+                                        })}
+                                    >
+                                        <Text style={{ color: "white", fontWeight: "700" }}>
+                                            Compartir
+                                        </Text>
+                                    </Pressable>
+
+                                    <Pressable
+                                        onPress={onRevoke}
+                                        style={({ pressed }) => ({
+                                            flex: 1,
+                                            paddingVertical: 12,
+                                            borderRadius: 12,
+                                            alignItems: "center",
+                                            borderWidth: 1,
+                                            borderColor: colors.danger,
+                                            opacity: pressed ? 0.85 : 1,
+                                        })}
+                                    >
+                                        <Text style={{ color: colors.danger, fontWeight: "700" }}>
+                                            Revocar
+                                        </Text>
+                                    </Pressable>
+                                </View>
+                            </>
+                        ) : (
+                            <>
+                                <Text style={{ color: colors.textMuted, marginBottom: spacing.md }}>
+                                    No hay invitaciones pendientes. Generá un código nuevo.
+                                </Text>
+                                <Pressable
+                                    onPress={onGenerate}
+                                    style={({ pressed }) => ({
+                                        paddingVertical: 12,
+                                        borderRadius: 12,
+                                        alignItems: "center",
+                                        backgroundColor: colors.primary,
+                                        opacity: pressed ? 0.85 : 1,
+                                    })}
+                                >
+                                    <Text style={{ color: "white", fontWeight: "700" }}>
+                                        Generar invitación
+                                    </Text>
+                                </Pressable>
+                            </>
+                        )}
+
+                        <View style={{ marginTop: spacing.lg }}>
+                            <Pressable
+                                onPress={() => setInvitesOpen(false)}
+                                style={({ pressed }) => ({
+                                    paddingVertical: 12,
+                                    borderRadius: 12,
+                                    alignItems: "center",
+                                    backgroundColor: colors.cardAlt,
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    opacity: pressed ? 0.85 : 1,
+                                })}
+                            >
+                                <Text style={{ color: colors.text, fontWeight: "700" }}>Cerrar</Text>
+                            </Pressable>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+        </SafeAreaView>
+    );
 }

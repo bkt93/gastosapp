@@ -5,6 +5,7 @@ export type ProjectMember = {
     uid: string;
     role: 'owner' | 'member';
     joinedAt?: Date | null;
+    displayName?: string | null;
 };
 
 export function subscribeProjectMembers(
