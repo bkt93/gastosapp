@@ -1,21 +1,45 @@
-// app/services/new.tsx
+// app/services/new.tsx — Nueva UI: select de categoría con ícono, chips de miembros, date picker
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
-import { router, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, Text, TextInput, View } from "react-native";
+import {
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import { getStoredUser } from "../../src/auth-storage";
+import AppHeader from "../../src/components/AppHeader";
 import { scheduleServiceReminders } from "../../src/notifications/services-reminders";
 import { subscribeProjectMembers, type ProjectMember } from "../../src/services/members.read";
 import { createService, type ServiceInput } from "../../src/services/services";
+import { colors, radius, spacing } from "../../src/theme";
 import { formatARS, toCents } from "../../src/utils/money";
 
-const SERVICE_TYPES = ["Luz", "Gas", "Agua", "Cuota IPV", "Resumen tarjeta", "custom"] as const;
-type ServiceType = typeof SERVICE_TYPES[number];
+// 🔧 Catálogo de categorías con ícono (editá a gusto)
+const SERVICE_CATEGORIES = [
+    { key: "Luz", label: "Luz", icon: "💡" },
+    { key: "Gas", label: "Gas", icon: "🔥" },
+    { key: "Agua", label: "Agua", icon: "💧" },
+    { key: "Cuota IPV", label: "Cuota IPV", icon: "🏠" },
+    { key: "Resumen tarjeta", label: "Resumen tarjeta", icon: "💳" },
+    { key: "custom", label: "Personalizado", icon: "🧩" },
+] as const;
+type ServiceType = typeof SERVICE_CATEGORIES[number]["key"];
 
 export default function NewService() {
-    const { projectId } = useLocalSearchParams<{ projectId: string }>();
+    const { projectId, projectName } = useLocalSearchParams<{ projectId: string; projectName?: string }>();
     if (!projectId) return <Text style={{ padding: 16 }}>Falta projectId</Text>;
 
+    // Estado
     const [type, setType] = useState<ServiceType>("Luz");
     const [title, setTitle] = useState("");
     const [amount, setAmount] = useState("");
@@ -31,6 +55,12 @@ export default function NewService() {
     const [loadingMembers, setLoadingMembers] = useState(true);
     const [saving, setSaving] = useState(false);
 
+    const router = useRouter();
+
+    // Modal de categoría
+    const [showTypeModal, setShowTypeModal] = useState(false);
+
+    // Miembros
     useEffect(() => {
         setLoadingMembers(true);
         return subscribeProjectMembers(String(projectId), (arr) => {
@@ -56,21 +86,23 @@ export default function NewService() {
     }
 
     function onChangeDue(event: DateTimePickerEvent, date?: Date) {
-        // En Android el picker es modal: cerrar siempre al cambiar/cancelar
         if (Platform.OS === "android") setShowDuePicker(false);
-        // Solo setear si el usuario confirmó (event.type === 'set')
-        if (event.type === "set" && date) {
-            setDueDate(date);
-        }
-        // En iOS podríamos dejarlo abierto (inline), pero para UX consistente lo cerramos al elegir:
+        if (event.type === "set" && date) setDueDate(date);
         if (Platform.OS === "ios" && event.type === "set") setShowDuePicker(false);
     }
 
+    const selectedType = SERVICE_CATEGORIES.find((c) => c.key === type) ?? SERVICE_CATEGORIES[0];
+    const canSave =
+        title.trim().length >= 3 && toCents(amount) > 0 && !!dueDate && !!projectId;
+
     async function onSave() {
         const amountCents = toCents(amount);
-        if (!title || title.trim().length < 3) return Alert.alert("Título muy corto");
-        if (amountCents <= 0) return Alert.alert("Importe inválido");
-        if (!dueDate) return Alert.alert("Falta fecha de vencimiento");
+        if (!canSave) {
+            if (title.trim().length < 3) return Alert.alert("Título muy corto");
+            if (amountCents <= 0) return Alert.alert("Importe inválido");
+            if (!dueDate) return Alert.alert("Falta fecha de vencimiento");
+            return;
+        }
 
         const user = await getStoredUser();
         if (!user) return Alert.alert("Sesión no encontrada");
@@ -92,9 +124,9 @@ export default function NewService() {
 
             const id = await createService(String(projectId), input);
 
-            // Programar notificaciones locales
+            // Notificaciones locales
             await scheduleServiceReminders(id, input.title, input.dueDate, formatARS(input.amountCents));
-
+            
             router.replace({ pathname: "/services", params: { projectId: String(projectId) } });
         } catch (e: any) {
             Alert.alert("Error", e?.message ?? "No se pudo crear el servicio");
@@ -104,146 +136,306 @@ export default function NewService() {
     }
 
     return (
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-            <Text style={{ fontSize: 18, fontWeight: "700" }}>Nuevo servicio</Text>
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+            <Stack.Screen options={{ headerShown: false }} />
+            <AppHeader
+                onPressLeft={() => router.back?.()}
+                leftIcon="chevron-back"
+                title="Nuevo servicio"
+                subtitle={projectName ?? undefined}
+            />
 
-            <Text>Tipo</Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {SERVICE_TYPES.map((t) => (
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.select({ ios: "padding", android: undefined })}
+            >
+                <ScrollView
+                    contentContainerStyle={{ padding: spacing.xl, paddingBottom: spacing.xl * 4 }}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    {/* ==== CATEGORÍA (select con ícono) ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Categoría</Text>
                     <Pressable
-                        key={t}
-                        onPress={() => setType(t)}
+                        onPress={() => setShowTypeModal(true)}
                         style={{
-                            paddingVertical: 8,
-                            paddingHorizontal: 12,
-                            borderRadius: 999,
+                            backgroundColor: colors.cardAlt,
                             borderWidth: 1,
-                            borderColor: type === t ? "#60a5fa" : "#333",
-                            backgroundColor: type === t ? "#1e293b" : "#111",
+                            borderColor: colors.border,
+                            borderRadius: 12,
+                            paddingVertical: 12,
+                            paddingHorizontal: spacing.md,
+                            marginBottom: spacing.md,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 8,
                         }}
                     >
-                        <Text style={{ color: "#fff" }}>{t}</Text>
+                        <Text style={{ fontSize: 18 }}>{selectedType.icon}</Text>
+                        <Text style={{ color: colors.text }}>{selectedType.label}</Text>
                     </Pressable>
-                ))}
-            </View>
 
-            <Text>Título</Text>
-            <TextInput
-                value={title}
-                onChangeText={setTitle}
-                placeholder="Ej: Luz – Octubre"
-                placeholderTextColor="#666"
-                style={{ backgroundColor: "#111", color: "#fff", padding: 12, borderRadius: 10 }}
-            />
-
-            <Text>Importe (ARS)</Text>
-            <TextInput
-                value={amount}
-                onChangeText={setAmount}
-                keyboardType="decimal-pad"
-                placeholder="Ej: 12345.67"
-                placeholderTextColor="#666"
-                style={{ backgroundColor: "#111", color: "#fff", padding: 12, borderRadius: 10 }}
-            />
-
-            <Text>Vencimiento</Text>
-            <View style={{ gap: 8 }}>
-                <Pressable
-                    onPress={() => setShowDuePicker(true)}
-                    style={{
-                        backgroundColor: "#111",
-                        borderRadius: 10,
-                        padding: 12,
-                        borderWidth: 1,
-                        borderColor: "#333",
-                    }}
-                >
-                    <Text style={{ color: "#fff" }}>
-                        {dueDate.toLocaleDateString()}
-                    </Text>
-                    <Text style={{ color: "#aaa", marginTop: 4 }}>Tocar para elegir fecha</Text>
-                </Pressable>
-
-                {showDuePicker && (
-                    <DateTimePicker
-                        value={dueDate}
-                        mode="date"
-                        display={Platform.OS === "ios" ? "inline" : "default"}
-                        onChange={onChangeDue}
+                    {/* ==== TÍTULO ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Título</Text>
+                    <TextInput
+                        value={title}
+                        onChangeText={setTitle}
+                        placeholder="Ej: Luz — Octubre"
+                        placeholderTextColor={colors.textMuted}
+                        style={{
+                            color: colors.text,
+                            backgroundColor: colors.cardAlt,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            borderRadius: 12,
+                            padding: 12,
+                            marginBottom: spacing.md,
+                        }}
                     />
-                )}
-            </View>
 
-            <Text>Asignado a (opcional)</Text>
-            {loadingMembers ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <ActivityIndicator />
-                    <Text style={{ color: "#aaa" }}>Cargando miembros…</Text>
-                </View>
-            ) : (
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                    <Pressable
-                        onPress={() => selectAssigned(undefined)}
+                    {/* ==== IMPORTE ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Importe</Text>
+                    <TextInput
+                        value={amount}
+                        onChangeText={setAmount}
+                        keyboardType="decimal-pad"
+                        placeholder="$ 0,00"
+                        placeholderTextColor={colors.textMuted}
                         style={{
-                            paddingVertical: 8,
-                            paddingHorizontal: 12,
-                            borderRadius: 999,
+                            color: colors.text,
+                            backgroundColor: colors.cardAlt,
                             borderWidth: 1,
-                            borderColor: !assignedToUid ? "#60a5fa" : "#333",
-                            backgroundColor: !assignedToUid ? "#1e293b" : "#111",
+                            borderColor: colors.border,
+                            borderRadius: 12,
+                            padding: 12,
+                            marginBottom: spacing.xs,
+                        }}
+                    />
+                    {toCents(amount) > 0 && (
+                        <Text style={{ color: colors.textMuted, marginBottom: spacing.md }}>
+                            {formatARS(toCents(amount))}
+                        </Text>
+                    )}
+
+                    {/* ==== VENCIMIENTO ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Vence</Text>
+                    <Pressable
+                        onPress={() => setShowDuePicker(true)}
+                        style={{
+                            backgroundColor: colors.cardAlt,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            borderRadius: 12,
+                            padding: 12,
+                            marginBottom: spacing.md,
                         }}
                     >
-                        <Text style={{ color: "#fff" }}>Nadie</Text>
+                        <Text style={{ color: colors.text }}>
+                            {new Intl.DateTimeFormat("es-AR").format(dueDate)}
+                        </Text>
+                        <Text style={{ color: colors.textMuted, marginTop: 4 }}>Tocar para elegir fecha</Text>
                     </Pressable>
+                    {showDuePicker && (
+                        <DateTimePicker
+                            value={dueDate}
+                            mode="date"
+                            display={Platform.OS === "ios" ? "inline" : "default"}
+                            onChange={onChangeDue}
+                        />
+                    )}
 
-                    {members.map((m) => {
-                        const name = (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`;
-                        const active = assignedToUid === m.uid;
-                        return (
-                            <Pressable
-                                key={m.uid}
-                                onPress={() => selectAssigned(m.uid)}
-                                style={{
-                                    paddingVertical: 8,
-                                    paddingHorizontal: 12,
-                                    borderRadius: 999,
-                                    borderWidth: 1,
-                                    borderColor: active ? "#60a5fa" : "#333",
-                                    backgroundColor: active ? "#1e293b" : "#111",
-                                }}
-                            >
-                                <Text style={{ color: "#fff" }}>{name}</Text>
-                            </Pressable>
-                        );
-                    })}
+                    {/* ==== ASIGNADO A ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Asignado a</Text>
+                    {loadingMembers ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: spacing.md }}>
+                            <ActivityIndicator color={colors.text} />
+                            <Text style={{ color: colors.textMuted }}>Cargando miembros…</Text>
+                        </View>
+                    ) : (
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: spacing.md }}>
+                            <Pill
+                                label="Nadie"
+                                selected={!assignedToUid}
+                                onPress={() => selectAssigned(undefined)}
+                            />
+                            {members.map((m) => {
+                                const name = (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`;
+                                const active = assignedToUid === m.uid;
+                                return (
+                                    <Pill
+                                        key={m.uid}
+                                        label={name}
+                                        selected={active}
+                                        onPress={() => selectAssigned(m.uid)}
+                                    />
+                                );
+                            })}
+                        </View>
+                    )}
+
+                    {/* ==== DESCRIPCIÓN ==== */}
+                    <Text style={{ color: colors.textMuted, marginBottom: 6 }}>Descripción (opcional)</Text>
+                    <TextInput
+                        value={description}
+                        onChangeText={setDescription}
+                        multiline
+                        maxLength={250}
+                        placeholder="Hasta 250 caracteres"
+                        placeholderTextColor={colors.textMuted}
+                        style={{
+                            color: colors.text,
+                            backgroundColor: colors.cardAlt,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            borderRadius: 12,
+                            padding: 12,
+                            minHeight: 90,
+                            textAlignVertical: "top",
+                        }}
+                    />
+                    <Text style={{ color: colors.textMuted, alignSelf: "flex-end", marginTop: 4 }}>
+                        {description.length}/250
+                    </Text>
+
+                    {/* ==== ACCIONES ==== */}
+                    <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+                        <Pressable
+                            onPress={() => router.back?.()}
+                            style={({ pressed }) => ({
+                                flex: 1,
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: "center",
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                backgroundColor: colors.cardAlt,
+                                opacity: pressed ? 0.85 : 1,
+                            })}
+                        >
+                            <Text style={{ color: colors.text }}>Cancelar</Text>
+                        </Pressable>
+
+                        <Pressable
+                            onPress={onSave}
+                            disabled={!canSave || saving}
+                            style={({ pressed }) => ({
+                                flex: 1,
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: "center",
+                                backgroundColor: colors.primary,
+                                opacity: !canSave || saving || pressed ? 0.6 : 1,
+                            })}
+                        >
+                            <Text style={{ color: "white", fontWeight: "700" }}>
+                                {saving ? "Guardando…" : "Guardar"}
+                            </Text>
+                        </Pressable>
+                    </View>
+                </ScrollView>
+            </KeyboardAvoidingView>
+
+            {/* ==== MODAL CATEGORÍAS ==== */}
+            <Modal
+                visible={showTypeModal}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setShowTypeModal(false)}
+            >
+                <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" }}>
+                    <View
+                        style={{
+                            backgroundColor: colors.card,
+                            padding: spacing.lg,
+                            borderTopLeftRadius: radius.xl,
+                            borderTopRightRadius: radius.xl,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                        }}
+                    >
+                        <Text style={{ color: colors.text, fontSize: 18, fontWeight: "800", marginBottom: spacing.md }}>
+                            Elegir categoría
+                        </Text>
+
+                        <View style={{ gap: 8, marginBottom: spacing.lg }}>
+                            {SERVICE_CATEGORIES.map((opt) => {
+                                const selected = type === opt.key;
+                                return (
+                                    <Pressable
+                                        key={opt.key}
+                                        onPress={() => {
+                                            setType(opt.key);
+                                            setShowTypeModal(false);
+                                            // Si es "custom", sugerimos prellenar el título
+                                            if (opt.key === "custom" && !title.trim()) setTitle("Servicio");
+                                        }}
+                                        style={({ pressed }) => ({
+                                            paddingVertical: 12,
+                                            paddingHorizontal: spacing.md,
+                                            borderRadius: 12,
+                                            backgroundColor: pressed ? colors.cardAlt : "transparent",
+                                            borderWidth: 1,
+                                            borderColor: selected ? colors.primary : colors.border,
+                                            flexDirection: "row",
+                                            alignItems: "center",
+                                            gap: 10,
+                                            justifyContent: "space-between",
+                                        })}
+                                    >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                                            <Text style={{ fontSize: 18 }}>{opt.icon}</Text>
+                                            <Text style={{ color: colors.text }}>{opt.label}</Text>
+                                        </View>
+                                        {selected ? (
+                                            <Text style={{ color: colors.primary, fontWeight: "700" }}>✓</Text>
+                                        ) : null}
+                                    </Pressable>
+                                );
+                            })}
+                        </View>
+
+                        <Pressable
+                            onPress={() => setShowTypeModal(false)}
+                            style={({ pressed }) => ({
+                                paddingVertical: 12,
+                                borderRadius: 12,
+                                alignItems: "center",
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                backgroundColor: colors.cardAlt,
+                                opacity: pressed ? 0.85 : 1,
+                            })}
+                        >
+                            <Text style={{ color: colors.text }}>Cerrar</Text>
+                        </Pressable>
+                    </View>
                 </View>
-            )}
+            </Modal>
+        </SafeAreaView>
+    );
+}
 
-            <Text>Descripción (opcional)</Text>
-            <TextInput
-                value={description}
-                onChangeText={setDescription}
-                multiline
-                numberOfLines={3}
-                placeholder="Hasta 250 caracteres"
-                placeholderTextColor="#666"
-                maxLength={250}
-                style={{ backgroundColor: "#111", color: "#fff", padding: 12, borderRadius: 10, textAlignVertical: "top" }}
-            />
-            <Text style={{ color: "#aaa", alignSelf: "flex-end" }}>{description.length}/250</Text>
-
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
-                <Pressable
-                    onPress={onSave}
-                    disabled={saving}
-                    style={{ flex: 1, backgroundColor: "#2563eb", padding: 14, borderRadius: 12, alignItems: "center", opacity: saving ? 0.8 : 1 }}
-                >
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>{saving ? "Guardando…" : "Guardar"}</Text>
-                </Pressable>
-                <Pressable onPress={() => router.back()} style={{ width: 120, backgroundColor: "#374151", padding: 14, borderRadius: 12, alignItems: "center" }}>
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>Cancelar</Text>
-                </Pressable>
-            </View>
-        </View>
+function Pill({
+    label,
+    selected,
+    onPress,
+}: {
+    label: string;
+    selected?: boolean;
+    onPress: () => void;
+}) {
+    return (
+        <Pressable
+            onPress={onPress}
+            style={{
+                paddingVertical: 8,
+                paddingHorizontal: 12,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: selected ? colors.primary : colors.border,
+                backgroundColor: selected ? colors.cardAlt : "transparent",
+            }}
+        >
+            <Text style={{ color: colors.text }}>{label}</Text>
+        </Pressable>
     );
 }

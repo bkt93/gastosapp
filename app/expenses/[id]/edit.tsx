@@ -1,9 +1,22 @@
-// app/expenses/[id]/edit.tsx — Editar / Eliminar (con miembros reales)
-import { router, useLocalSearchParams } from "expo-router";
+// app/expenses/[id]/edit.tsx — Editar / Eliminar (UI unificada + fecha editable)
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "react-native";
-import { CATEGORIES } from "../../../constants/categories";
+import {
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+    ScrollView,
+    StatusBar,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import { db } from "../../../src/firebase";
 import { deleteExpense, updateExpense } from "../../../src/services/expenses";
 import {
@@ -12,39 +25,113 @@ import {
 } from "../../../src/services/members.read";
 import { toCents } from "../../../src/utils/money";
 
-export default function EditExpense() {
-    const [title, setTitle] = useState("");
-    const [category, setCategory] = useState<typeof CATEGORIES[number]>(CATEGORIES[0]);
-    const [amount, setAmount] = useState("");
+import {
+    CATEGORIES,
+    type Category,
+} from "../../../constants/categories";
+import AppHeader from "../../../src/components/AppHeader";
+import CategorySelect from "../../../src/components/CategorySelect";
+import { colors, radius, spacing } from "../../../src/theme";
 
-    // pagado por (se setea al cargar el documento y/o al tocar chips)
+// Chip reutilizable (miembros)
+function PillChip({
+    label,
+    selected,
+    onPress,
+}: {
+    label: string;
+    selected: boolean;
+    onPress: () => void;
+}) {
+    return (
+        <Pressable
+            onPress={onPress}
+            style={({ pressed }) => ({
+                paddingVertical: 8,
+                paddingHorizontal: 12,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: selected ? colors.primary : colors.border,
+                backgroundColor: selected ? colors.card : colors.cardAlt,
+                opacity: pressed ? 0.85 : 1,
+            })}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+        >
+            <Text style={{ color: colors.text, fontWeight: selected ? "700" : "500" }}>
+                {label}
+            </Text>
+        </Pressable>
+    );
+}
+
+// Convierte lo que venga de Firestore a Date
+function toJSDate(x: any): Date {
+    if (x instanceof Date) return x;
+    if (x?.toDate) return x.toDate();
+    if (typeof x === "number") return new Date(x);
+    if (typeof x === "string") return new Date(x);
+    return new Date();
+}
+
+export default function EditExpense() {
+    const { id, projectId, projectName } = useLocalSearchParams<{
+        id: string;
+        projectId: string;
+        projectName?: string;
+    }>();
+
+    // --- state del doc ---
+    const [title, setTitle] = useState("");
+    const [category, setCategory] = useState<Category>(CATEGORIES[0]);
+    const [amount, setAmount] = useState("");
+    const [date, setDate] = useState(new Date());
+    const [showPicker, setShowPicker] = useState(false);
+
     const [paidByUid, setPaidByUid] = useState<string>("");
     const [paidByName, setPaidByName] = useState<string>("");
 
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    // miembros del proyecto
+    // --- miembros ---
     const [members, setMembers] = useState<ProjectMember[]>([]);
     const [loadingMembers, setLoadingMembers] = useState(true);
 
-    const { id, projectId } = useLocalSearchParams<{ id: string; projectId: string }>();
-    if (!projectId) return <Text style={{ padding: 16 }}>Falta projectId</Text>;
+    if (!projectId) {
+        return (
+            <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+                <StatusBar barStyle="light-content" />
+                <AppHeader
+                    onPressLeft={() => router.back()}
+                    leftIcon="chevron-back"
+                    title="Editar gasto"
+                />
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.lg }}>
+                    <Text style={{ color: colors.text }}>Falta projectId</Text>
+                </View>
+            </SafeAreaView>
+        );
+    }
 
     // Cargar gasto
     useEffect(() => {
         let mounted = true;
         (async () => {
             try {
-                const snap = await getDoc(doc(db, "projects", String(projectId), "expenses", String(id)));
+                const ref = doc(db, "projects", String(projectId), "expenses", String(id));
+                const snap = await getDoc(ref);
                 const data: any = snap.data();
                 if (data && mounted) {
                     setTitle(data.title ?? "");
-                    setCategory(data.category ?? CATEGORIES[0]);
+                    setCategory((data.category as Category) ?? CATEGORIES[0]);
                     setAmount(String((data.amountCents ?? 0) / 100));
                     setPaidByUid(data.paidByUid ?? "");
                     setPaidByName(data.paidByName ?? "");
+                    setDate(toJSDate(data.date));
                 }
+            } catch (e) {
+                Alert.alert("Error", "No se pudo cargar el gasto");
             } finally {
                 if (mounted) setLoadingDoc(false);
             }
@@ -64,25 +151,27 @@ export default function EditExpense() {
         return unsub;
     }, [projectId]);
 
-    // Helper para nombre visible (igual que en index.tsx)
+    // Helper para nombre visible
     const displayNameOf = (m: ProjectMember) =>
         (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`;
 
-    // Lista de chips de miembros + fallback si el gasto tiene un uid que no está en la lista
+    // Chips de miembros (+ fallback)
     const memberChips = useMemo(() => {
         const chips = members.map((m) => ({ uid: m.uid, name: displayNameOf(m) }));
-        // Inyectar fallback si el gasto tiene algo distinto
         if (paidByUid && !chips.some((c) => c.uid === paidByUid)) {
             chips.unshift({ uid: paidByUid, name: paidByName || `Miembro ${paidByUid.slice(0, 6)}` });
         }
         return chips;
     }, [members, paidByUid, paidByName]);
 
+    const canSave = useMemo(() => {
+        const amountCents = toCents(amount);
+        return title.trim().length >= 3 && amountCents > 0 && !!paidByUid && !!paidByName;
+    }, [title, amount, paidByUid, paidByName]);
+
     async function onSave() {
         const amountCents = toCents(amount);
-        if (title.trim().length < 3) return Alert.alert("Título muy corto");
-        if (amountCents <= 0) return Alert.alert("Importe inválido");
-        if (!paidByUid || !paidByName) return Alert.alert("Falta seleccionar 'Pagado por'");
+        if (!canSave) return;
 
         try {
             setSaving(true);
@@ -91,7 +180,8 @@ export default function EditExpense() {
                 category,
                 amountCents,
                 paidByUid,
-                paidByName, // guardamos también el nombre visible actual
+                paidByName,
+                date, // <-- ahora también se actualiza la fecha
             });
             router.back();
         } catch (e: any) {
@@ -117,108 +207,210 @@ export default function EditExpense() {
 
     if (loadingDoc) {
         return (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                <ActivityIndicator />
-                <Text style={{ marginTop: 8 }}>Cargando…</Text>
-            </View>
+            <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+                <StatusBar barStyle="light-content" />
+                <AppHeader
+                    onPressLeft={() => router.back()}
+                    leftIcon="chevron-back"
+                    title="Editar gasto"
+                    subtitle={typeof projectName === "string" ? projectName : undefined}
+                />
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <ActivityIndicator />
+                    <Text style={{ color: colors.textMuted }}>Cargando…</Text>
+                </View>
+            </SafeAreaView>
         );
     }
 
+    const helpTitleTooShort = title.trim().length > 0 && title.trim().length < 3;
+    const helpAmountInvalid = amount.length > 0 && toCents(amount) <= 0;
+
     return (
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-            <Text style={{ fontSize: 18, fontWeight: "700" }}>Editar gasto</Text>
-
-            <Text>Título</Text>
-            <TextInput
-                value={title}
-                onChangeText={setTitle}
-                style={{ backgroundColor: "#111", color: "#fff", padding: 12, borderRadius: 10 }}
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+            <Stack.Screen options={{ headerShown: false }} />
+            <StatusBar barStyle="light-content" />
+            <AppHeader
+                onPressLeft={() => router.back()}
+                leftIcon="chevron-back"
+                title="Editar gasto"
+                subtitle={typeof projectName === "string" ? projectName : undefined}
             />
 
-            <Text>Categoría</Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {CATEGORIES.map((c) => (
-                    <Pressable
-                        key={c}
-                        onPress={() => setCategory(c)}
-                        style={{
-                            paddingVertical: 8,
-                            paddingHorizontal: 12,
-                            borderRadius: 999,
-                            borderWidth: 1,
-                            borderColor: category === c ? "#60a5fa" : "#333",
-                            backgroundColor: category === c ? "#1e293b" : "#111",
-                        }}
-                    >
-                        <Text style={{ color: "#fff" }}>{c}</Text>
-                    </Pressable>
-                ))}
-            </View>
-
-            <Text>Importe (ARS)</Text>
-            <TextInput
-                value={amount}
-                onChangeText={setAmount}
-                keyboardType="decimal-pad"
-                style={{ backgroundColor: "#111", color: "#fff", padding: 12, borderRadius: 10 }}
-            />
-
-            <Text>Pagado por</Text>
-            {loadingMembers ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <ActivityIndicator />
-                    <Text style={{ color: "#aaa" }}>Cargando miembros…</Text>
-                </View>
-            ) : memberChips.length === 0 ? (
-                <Text style={{ color: "#aaa" }}>No hay miembros en el proyecto.</Text>
-            ) : (
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                    {memberChips.map((m) => (
-                        <Pressable
-                            key={m.uid}
-                            onPress={() => {
-                                setPaidByUid(m.uid);
-                                setPaidByName(m.name);
-                            }}
-                            style={{
-                                paddingVertical: 8,
-                                paddingHorizontal: 12,
-                                borderRadius: 999,
-                                borderWidth: 1,
-                                borderColor: paidByUid === m.uid ? "#60a5fa" : "#333",
-                                backgroundColor: paidByUid === m.uid ? "#1e293b" : "#111",
-                            }}
-                        >
-                            <Text style={{ color: "#fff" }}>{m.name}</Text>
-                        </Pressable>
-                    ))}
-                </View>
-            )}
-
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
-                <Pressable
-                    onPress={onSave}
-                    disabled={saving}
-                    style={{
-                        flex: 1,
-                        backgroundColor: "#2563eb",
-                        padding: 14,
-                        borderRadius: 12,
-                        alignItems: "center",
-                        opacity: saving ? 0.8 : 1,
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.select({ ios: "padding", android: undefined })}
+            >
+                <ScrollView
+                    contentContainerStyle={{
+                        paddingHorizontal: spacing.lg,
+                        paddingTop: spacing.md,
+                        paddingBottom: 120,
+                        gap: spacing.md,
                     }}
+                    keyboardShouldPersistTaps="handled"
                 >
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>
-                        {saving ? "Guardando…" : "Guardar"}
-                    </Text>
-                </Pressable>
-                <Pressable
-                    onPress={onDelete}
-                    style={{ width: 120, backgroundColor: "#ef4444", padding: 14, borderRadius: 12, alignItems: "center" }}
-                >
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>Eliminar</Text>
-                </Pressable>
-            </View>
-        </View>
+                    {/* Título */}
+                    <View>
+                        <Text style={{ color: colors.text, fontWeight: "700", marginBottom: 6 }}>
+                            Título
+                        </Text>
+                        <TextInput
+                            value={title}
+                            onChangeText={setTitle}
+                            placeholder="Por ejemplo, Bebidas"
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: radius.lg,
+                                padding: 12,
+                            }}
+                            returnKeyType="next"
+                        />
+                        {helpTitleTooShort && (
+                            <Text style={{ color: colors.textMuted, marginTop: 6 }}>
+                                Usá al menos 3 caracteres.
+                            </Text>
+                        )}
+                    </View>
+
+                    {/* Categoría (Select con emojis) */}
+                    <CategorySelect value={category} onChange={setCategory} />
+
+                    {/* Importe */}
+                    <View>
+                        <Text style={{ color: colors.text, fontWeight: "700", marginBottom: 6 }}>
+                            Importe (ARS)
+                        </Text>
+                        <TextInput
+                            value={amount}
+                            onChangeText={setAmount}
+                            keyboardType="decimal-pad"
+                            placeholder="0,00"
+                            placeholderTextColor={colors.textMuted}
+                            style={{
+                                color: colors.text,
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: radius.lg,
+                                padding: 12,
+                            }}
+                        />
+                        {helpAmountInvalid && (
+                            <Text style={{ color: colors.textMuted, marginTop: 6 }}>
+                                Ingresá un importe válido mayor a 0.
+                            </Text>
+                        )}
+                    </View>
+
+                    {/* Pagado por */}
+                    <View>
+                        <Text style={{ color: colors.text, fontWeight: "700", marginBottom: 6 }}>
+                            Pagado por
+                        </Text>
+                        {loadingMembers ? (
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                                <ActivityIndicator />
+                                <Text style={{ color: colors.textMuted }}>Cargando miembros…</Text>
+                            </View>
+                        ) : memberChips.length === 0 ? (
+                            <Text style={{ color: colors.textMuted }}>No hay miembros en el proyecto.</Text>
+                        ) : (
+                            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+                                {memberChips.map((m) => (
+                                    <PillChip
+                                        key={m.uid}
+                                        label={m.name}
+                                        selected={paidByUid === m.uid}
+                                        onPress={() => {
+                                            setPaidByUid(m.uid);
+                                            setPaidByName(m.name);
+                                        }}
+                                    />
+                                ))}
+                            </View>
+                        )}
+                    </View>
+
+                    {/* Fecha (editable) */}
+                    <View>
+                        <Text style={{ color: colors.text, fontWeight: "700", marginBottom: 6 }}>
+                            Fecha
+                        </Text>
+                        <Pressable
+                            onPress={() => setShowPicker(true)}
+                            style={({ pressed }) => ({
+                                backgroundColor: colors.cardAlt,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                borderRadius: radius.lg,
+                                padding: 12,
+                                opacity: pressed ? 0.85 : 1,
+                            })}
+                            accessibilityRole="button"
+                            accessibilityLabel="Elegir fecha"
+                        >
+                            <Text style={{ color: colors.text }}>
+                                {date.toLocaleDateString()}
+                            </Text>
+                        </Pressable>
+
+                        {showPicker && (
+                            <DateTimePicker
+                                value={date}
+                                mode="date"
+                                display="default"
+                                onChange={(_, d) => {
+                                    setShowPicker(false);
+                                    if (d) setDate(d);
+                                }}
+                            />
+                        )}
+                    </View>
+
+                    {/* Acciones */}
+                    <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+                        <Pressable
+                            onPress={onSave}
+                            disabled={saving || !canSave}
+                            style={({ pressed }) => ({
+                                flex: 1,
+                                backgroundColor: saving || !canSave ? colors.textMuted : colors.primary,
+                                padding: 14,
+                                borderRadius: radius.xl,
+                                alignItems: "center",
+                                opacity: pressed ? 0.85 : 1,
+                            })}
+                            accessibilityRole="button"
+                            accessibilityLabel="Guardar cambios"
+                        >
+                            <Text style={{ color: "white", fontWeight: "700" }}>
+                                {saving ? "Guardando…" : "Guardar"}
+                            </Text>
+                        </Pressable>
+
+                        <Pressable
+                            onPress={onDelete}
+                            style={({ pressed }) => ({
+                                width: 120,
+                                padding: 14,
+                                borderRadius: radius.xl,
+                                alignItems: "center",
+                                backgroundColor: "#ef4444", // si luego sumás colors.danger, reemplazar
+                                opacity: pressed ? 0.85 : 1,
+                            })}
+                            accessibilityRole="button"
+                            accessibilityLabel="Eliminar gasto"
+                        >
+                            <Text style={{ color: "white", fontWeight: "700" }}>Eliminar</Text>
+                        </Pressable>
+                    </View>
+                </ScrollView>
+            </KeyboardAvoidingView>
+        </SafeAreaView>
     );
 }

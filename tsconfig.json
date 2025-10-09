@@ -25,7 +25,7 @@
     "App.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-  ],
+, "constants"  ],
   "exclude": [
     "node_modules"
   ],
