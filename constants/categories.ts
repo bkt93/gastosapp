@@ -8,7 +8,7 @@ export const CATEGORIES = [
     "Mascotas",
     "Educación",
     "Ocio",
-    "Varios",
+    "Otros",
 ] as const;
 
 export type Category = typeof CATEGORIES[number];
@@ -22,7 +22,7 @@ export const CATEGORY_OPTIONS = [
     { key: "Mascotas", emoji: "🐾" },
     { key: "Educación", emoji: "🎓" },
     { key: "Ocio", emoji: "🎉" },
-    { key: "Varios", emoji: "🧩" },
+    { key: "Otros", emoji: "🧩" },
 ] as const satisfies ReadonlyArray<{ key: Category; emoji: string }>;
 
 export function getCategoryEmoji(cat: Category): string {

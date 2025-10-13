@@ -1,26 +1,27 @@
-// app/expenses/index.tsx — Listado mensual, agrupado por día (usa Date del modelo)
-import { Link, useLocalSearchParams, useRouter } from "expo-router";
+// app/expenses/index.tsx — Listado mensual con filtro por integrante y contribuciones
+import { Link, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Pressable,
+    ScrollView,
     SectionList,
     Text,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import BottomFade from "../../components/BottonFade";
+import { getCategoryEmoji } from "../../constants/categories";
 import { useMonthExpenses } from "../../hooks/useMonthExpenses";
 import AppHeader from "../../src/components/AppHeader";
+import FAB from "../../src/components/FAB";
+import type { Expense } from "../../src/models";
 import {
     subscribeProjectMembers,
     type ProjectMember,
 } from "../../src/services/members.read";
 import { colors, radius, spacing } from "../../src/theme";
 import { formatARS } from "../../src/utils/money";
-
-import { Stack } from "expo-router";
-import FAB from "../../src/components/FAB";
-import type { Expense } from "../../src/models";
 
 // --- helpers de fecha (local) ---
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -39,6 +40,9 @@ const formatDayHeader = (d: Date) =>
 const getDateValue = (e: Expense): Date => e.date ?? e.createdAt;
 
 export default function ExpensesIndex() {
+
+    const insets = useSafeAreaInsets();
+
     const { projectId, projectName } = useLocalSearchParams<{
         projectId: string;
         projectName?: string;
@@ -67,21 +71,67 @@ export default function ExpensesIndex() {
 
     // miembros -> mapa uid => displayName (fallback)
     const [members, setMembers] = useState<ProjectMember[]>([]);
-    useEffect(() => subscribeProjectMembers(String(projectId), setMembers), [projectId]);
+    useEffect(
+        () => subscribeProjectMembers(String(projectId), setMembers),
+        [projectId]
+    );
 
     const nameByUid = useMemo(() => {
         const map = new Map<string, string>();
         members.forEach((m) =>
-            map.set(m.uid, (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`)
+            map.set(
+                m.uid,
+                (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`
+            )
         );
         return map;
     }, [members]);
 
-    // Agrupar por día (local) dentro del mes
+    // ------- NUEVO: filtro por integrante + contribuciones -------
+    // UID seleccionado ("ALL" = todos)
+    const [selectedUid, setSelectedUid] = useState<string>("ALL");
+
+    // Lista de miembros como {uid, name} para chips
+    const memberList = useMemo(
+        () =>
+            members.map((m) => ({
+                uid: m.uid,
+                name: (m as any).displayName || `Miembro ${m.uid.slice(0, 6)}`,
+            })),
+        [members]
+    );
+
+    // Totales por integrante + ranking + total general del mes (en cents)
+    const contrib = useMemo(() => {
+        const map = new Map<string, number>();
+        for (const it of items) {
+            map.set(it.paidByUid, (map.get(it.paidByUid) || 0) + it.amountCents);
+        }
+        const arr = [...map.entries()].map(([uid, total]) => ({
+            uid,
+            name: nameByUid.get(uid) ?? `Miembro ${uid.slice(0, 6)}`,
+            total,
+        }));
+        arr.sort((a, b) => b.total - a.total);
+        const totalAll = arr.reduce((s, a) => s + a.total, 0);
+        return { totalsByUid: map, sorted: arr, totalAll };
+    }, [items, nameByUid]);
+
+    // Aplica filtro por integrante al feed
+    const filteredItems = useMemo(
+        () =>
+            selectedUid === "ALL"
+                ? items
+                : items.filter((it) => it.paidByUid === selectedUid),
+        [items, selectedUid]
+    );
+    // ------- FIN NUEVO -------
+
+    // Agrupar por día (local) dentro del mes – ahora con filteredItems
     const sections = useMemo(() => {
         const byDay = new Map<string, { date: Date; items: Expense[] }>();
 
-        items.forEach((it) => {
+        filteredItems.forEach((it) => {
             const d = getDateValue(it);
             const key = keyFromLocalDate(d);
             if (!byDay.has(key)) byDay.set(key, { date: new Date(d), items: [] });
@@ -102,11 +152,10 @@ export default function ExpensesIndex() {
                 data,
             };
         });
-    }, [items]);
+    }, [filteredItems]);
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-
             <Stack.Screen options={{ headerShown: false }} />
 
             {/* Un solo header */}
@@ -121,9 +170,127 @@ export default function ExpensesIndex() {
                 <SectionList
                     sections={sections}
                     keyExtractor={(it) => it.id}
-                    contentContainerStyle={{ paddingBottom: spacing.xl * 6 }}
+                    contentContainerStyle={{
+                        paddingBottom: spacing.xl * 6 + insets.bottom + 32, // +32 da aire extra
+                    }}
                     ListHeaderComponent={
                         <View style={{ paddingTop: spacing.md, paddingBottom: spacing.md }}>
+                            {/* NUEVO: Filtro por integrante */}
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={{ marginBottom: spacing.sm }}
+                                contentContainerStyle={{ gap: spacing.xs }}
+                            >
+                                <MemberChip
+                                    label="Todos"
+                                    selected={selectedUid === "ALL"}
+                                    onPress={() => setSelectedUid("ALL")}
+                                />
+                                {memberList.map((m) => {
+                                    const t = contrib.totalsByUid.get(m.uid) || 0;
+                                    const pct = contrib.totalAll
+                                        ? Math.round((t / contrib.totalAll) * 100)
+                                        : 0;
+                                    return (
+                                        <MemberChip
+                                            key={m.uid}
+                                            label={`${m.name} ${pct ? `(${pct}%)` : ""}`}
+                                            selected={selectedUid === m.uid}
+                                            onPress={() => setSelectedUid(m.uid)}
+                                        />
+                                    );
+                                })}
+                            </ScrollView>
+
+                            {/* NUEVO: Contribución por integrante */}
+                            <View
+                                style={{
+                                    backgroundColor: colors.card,
+                                    borderRadius: radius.lg,
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    padding: spacing.lg,
+                                    gap: spacing.sm,
+                                    marginBottom: spacing.sm,
+                                }}
+                            >
+                                <Text
+                                    style={{ color: colors.textMuted, fontSize: 12, marginBottom: 2 }}
+                                >
+                                    Contribución por integrante
+                                </Text>
+
+                                {contrib.sorted.length === 0 ? (
+                                    <Text style={{ color: colors.textMuted }}>
+                                        Sin gastos este mes.
+                                    </Text>
+                                ) : (
+                                    contrib.sorted.map((row) => {
+                                        const pct = contrib.totalAll
+                                            ? row.total / contrib.totalAll
+                                            : 0;
+                                        return (
+                                            <View key={row.uid} style={{ gap: 4 }}>
+                                                <View
+                                                    style={{
+                                                        flexDirection: "row",
+                                                        justifyContent: "space-between",
+                                                    }}
+                                                >
+                                                    <Text style={{ color: colors.text }} numberOfLines={1}>
+                                                        {row.name}
+                                                    </Text>
+                                                    <Text style={{ color: colors.text, fontWeight: "700" }}>
+                                                        {formatARS(row.total)} · {(pct * 100).toFixed(0)}%
+                                                    </Text>
+                                                </View>
+                                                <View
+                                                    style={{
+                                                        height: 6,
+                                                        borderRadius: 6,
+                                                        backgroundColor: "rgba(255,255,255,0.08)",
+                                                        overflow: "hidden",
+                                                    }}
+                                                >
+                                                    <View
+                                                        style={{
+                                                            width: `${Math.max(5, Math.round(pct * 100))}%`,
+                                                            height: "100%",
+                                                            backgroundColor: colors.text, // barra con color de texto
+                                                            opacity: 0.6,
+                                                        }}
+                                                    />
+                                                </View>
+                                            </View>
+                                        );
+                                    })
+                                )}
+
+                                {/* diferencia entre el 1.º y el 2.º en puntos porcentuales */}
+                                {contrib.sorted.length >= 2 && (
+                                    <Text
+                                        style={{
+                                            color: colors.textMuted,
+                                            marginTop: spacing.xs,
+                                            fontSize: 12,
+                                        }}
+                                    >
+                                        Dif. líder vs segundo:{" "}
+                                        {(() => {
+                                            const p1 = contrib.totalAll
+                                                ? contrib.sorted[0].total / contrib.totalAll
+                                                : 0;
+                                            const p2 = contrib.totalAll
+                                                ? contrib.sorted[1].total / contrib.totalAll
+                                                : 0;
+                                            const delta = Math.abs(p1 - p2) * 100;
+                                            return `${delta.toFixed(1)} pp`;
+                                        })()}
+                                    </Text>
+                                )}
+                            </View>
+
                             {/* Selector de mes */}
                             <View
                                 style={{
@@ -150,7 +317,7 @@ export default function ExpensesIndex() {
                                 <NavButton label="›" onPress={nextMonth} />
                             </View>
 
-                            {/* Total del mes */}
+                            {/* Total del mes (general) */}
                             <View
                                 style={{
                                     marginTop: spacing.sm,
@@ -218,18 +385,16 @@ export default function ExpensesIndex() {
                         >
                             {/* izquierda: título + meta */}
                             <View style={{ flexShrink: 1, paddingRight: spacing.md }}>
-                                <Text
-                                    style={{ color: colors.text, fontWeight: "700" }}
-                                    numberOfLines={1}
-                                >
+                                <Text style={{ color: colors.text, fontWeight: "700" }} numberOfLines={1}>
                                     {item.title}
                                 </Text>
                                 <Text
                                     style={{ color: colors.textMuted, marginTop: 2 }}
                                     numberOfLines={1}
                                 >
-                                    {item.category} • {nameByUid.get(item.paidByUid) ?? item.paidByName}
+                                    {`${getCategoryEmoji(item.category)} ${item.category}`} • {nameByUid.get(item.paidByUid) ?? item.paidByName}
                                 </Text>
+
                             </View>
 
                             {/* derecha: monto */}
@@ -299,6 +464,8 @@ export default function ExpensesIndex() {
                     }
                 />
 
+                <BottomFade height={120 + insets.bottom} />
+
                 <FAB
                     onPress={() =>
                         router.push({
@@ -313,13 +480,7 @@ export default function ExpensesIndex() {
     );
 }
 
-function NavButton({
-    label,
-    onPress,
-}: {
-    label: string;
-    onPress: () => void;
-}) {
+function NavButton({ label, onPress }: { label: string; onPress: () => void }) {
     return (
         <Pressable
             onPress={onPress}
@@ -337,6 +498,44 @@ function NavButton({
             hitSlop={8}
         >
             <Text style={{ color: colors.text, fontSize: 18, fontWeight: "700" }}>
+                {label}
+            </Text>
+        </Pressable>
+    );
+}
+
+// Chip simple reutilizable (si ya tenés PillChip, podés reemplazarlo)
+function MemberChip({
+    label,
+    selected,
+    onPress,
+}: {
+    label: string;
+    selected: boolean;
+    onPress: () => void;
+}) {
+    return (
+        <Pressable
+            onPress={onPress}
+            style={({ pressed }) => ({
+                paddingVertical: spacing.xs,
+                paddingHorizontal: spacing.md,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: selected ? colors.text : colors.border,
+                backgroundColor: selected ? "rgba(255,255,255,0.10)" : colors.card,
+                opacity: pressed ? 0.85 : 1,
+            })}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+        >
+            <Text
+                style={{
+                    color: colors.text,
+                    fontWeight: selected ? "700" : "500",
+                }}
+                numberOfLines={1}
+            >
                 {label}
             </Text>
         </Pressable>

@@ -1,0 +1,52 @@
+GastosApp — Release Notes v0.2.0 "Expenses Deep Dive"
+Fecha: 2025-10-13
+Build: Android versionCode 2 · iOS buildNumber 2
+
+Resumen
+-------
+Segundo build público. Este release profundiza la sección de Gastos, manteniendo el filtrado mensual por Firestore y añadiendo análisis y mejoras visuales.
+
+Added
+-----
+- Filtro por integrante (chips) sin tocar Firestore (cálculo en cliente).
+- Tarjeta de contribución por integrante con % y mini-barras.
+- Indicador “Diferencia líder vs segundo” en puntos porcentuales.
+- Listado que respeta el filtro por integrante seleccionado.
+- Fade inferior (degradado) para despegar el FAB de las cards.
+- Emoji de categoría en las cards sin persistirlo en Firestore.
+
+Changed
+-------
+- Padding inferior y sombra del FAB para evitar solapamientos.
+- Pequeños ajustes visuales alineados al modo oscuro de Fase 4.
+
+Fixed
+-----
+- Varias mejoras menores de presentación en expenses list.
+
+Notas técnicas
+-------------
+- Requiere instalar: expo-linear-gradient
+- Nuevas importaciones en app/expenses/index.tsx:
+    LinearGradient (expo-linear-gradient),
+    useSafeAreaInsets (react-native-safe-area-context),
+    getCategoryEmoji (constants/categories)
+- Nuevo estado: selectedUid = "ALL"
+- Cálculos memoizados: totales por paidByUid, orden, totalAll
+- Overlay <BottomFade/> con pointerEvents="none"
+
+Compatibilidad
+--------------
+- Sin cambios de modelos ni reglas Firestore.
+- No se guarda emoji en la base (se deriva por helper).
+
+Checklist post‑deploy
+---------------------
+[ ] Subir build a canal de prueba y probar en 2 dispositivos
+[ ] Verificar cargado del mes, filtros y % sumen ~100%
+[ ] Chequear que el FAB quede despejado con el fade
+[ ] Crear tag: git tag -a v0.2.0 -m "Expenses Deep Dive"; git push origin v0.2.0
+
+Créditos
+--------
+- Documentos fuente: “Profundización de Gastos” y Fase 4 UI Redesign.
