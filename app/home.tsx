@@ -28,6 +28,7 @@ import AppHeader from "../src/components/AppHeader";
 import FAB from "../src/components/FAB";
 import GreetingBar from "../src/components/GreetingBar";
 import ProjectCard from "../src/components/ProjectCard";
+import VersionBadge from "../src/components/VersionBadge";
 import { colors, radius, spacing } from "../src/theme";
 
 
@@ -213,29 +214,12 @@ export default function HomeScreen() {
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
             <StatusBar barStyle="light-content" />
-            {/* <Stack.Screen
-                options={{
-                    headerShown: false,
-                    title: "GastosApp",
-                    headerStyle: { backgroundColor: colors.bg },
-                    headerTintColor: colors.text,
-                    headerTitleStyle: { color: colors.text, fontWeight: "800" },
-                    headerRight: () => (
-                        <Pressable
-                            onPress={onLogout}
-                            style={({ pressed }) => ({
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
-                                opacity: pressed ? 0.7 : 1,
-                            })}
-                        >
-                            <Ionicons name="exit-outline" size={22} color={colors.text} />
-                        </Pressable>
-                    ),
-                }}
-            /> */}
 
             <AppHeader onPressRight={onLogout} />
+
+            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                <VersionBadge compact />
+            </View>
 
             <GreetingBar name={displayName} />
 

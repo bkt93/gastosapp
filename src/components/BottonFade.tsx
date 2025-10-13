@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { View } from "react-native";
-import { colors } from "../src/theme";
+import { colors } from "../theme";
 
 function BottomFade({ height = 120 }: { height?: number }) {
     return (

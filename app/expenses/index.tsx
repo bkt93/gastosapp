@@ -10,10 +10,10 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import BottomFade from "../../components/BottonFade";
 import { getCategoryEmoji } from "../../constants/categories";
 import { useMonthExpenses } from "../../hooks/useMonthExpenses";
 import AppHeader from "../../src/components/AppHeader";
+import BottomFade from "../../src/components/BottonFade";
 import FAB from "../../src/components/FAB";
 import type { Expense } from "../../src/models";
 import {

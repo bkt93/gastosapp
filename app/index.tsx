@@ -17,8 +17,9 @@ import {
     View,
 } from "react-native";
 import { saveUser } from "../src/auth-storage";
+import VersionBadge from "../src/components/VersionBadge";
 import { auth } from "../src/firebase";
-import { colors, radius, spacing } from "../src/theme"; // 👈 tu theme oficial
+import { colors, radius, spacing } from "../src/theme";
 
 export default function AuthScreen() {
     const [mode, setMode] = useState<"login" | "register">("login");
@@ -237,6 +238,10 @@ export default function AuthScreen() {
                 >
                     Al continuar aceptás nuestros Términos y Política de Privacidad.
                 </Text>
+
+                <View style={{ padding: 16 }}>
+                    <VersionBadge />
+                </View>
             </View>
         </View>
     );
