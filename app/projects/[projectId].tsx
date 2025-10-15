@@ -36,6 +36,7 @@ import { colors, radius, spacing } from "../../src/theme";
 
 // KPIs
 import { listenMonthExpenses } from "../../src/services/expenses";
+import { ensureSelfMembership } from "../../src/services/members.write";
 import { listenPendingServices } from "../../src/services/services";
 import { toYearMonth } from "../../src/utils/date";
 
@@ -167,6 +168,7 @@ export default function ProjectScreen() {
         const unsub = subscribeProjectMembers(String(projectId), (rows: PM[]) => {
             setMembers(rows);
         });
+        ensureSelfMembership(String(projectId)).catch(() => {});
         return () => unsub();
     }, [projectId]);
 

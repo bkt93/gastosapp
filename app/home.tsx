@@ -8,30 +8,33 @@ import {
     FlatList,
     Modal,
     Pressable,
+    RefreshControl, // 👈 pull-to-refresh
     StatusBar,
     Text,
     TextInput,
     View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import { clearUser, getStoredUser, type StoredUser } from "../src/auth-storage";
 import { auth } from "../src/firebase";
 import { createProject } from "../src/services/projects";
-import { fetchSharedProjectsOnce, subscribeSharedProjectsByUid } from "../src/services/projects.members.read";
+import {
+    fetchSharedProjectsOnceFlat as fetchSharedProjectsOnce,
+    subscribeSharedProjectsByUidFlat as subscribeSharedProjectsByUid
+} from "../src/services/projects.members.flat.read";
 import {
     fetchOwnedProjectsOnce,
     subscribeOwnedProjectsByUid,
-    type ProjectListItem
+    type ProjectListItem,
 } from "../src/services/projects.read";
 
-import { SafeAreaView } from "react-native-safe-area-context";
 import AppHeader from "../src/components/AppHeader";
 import FAB from "../src/components/FAB";
 import GreetingBar from "../src/components/GreetingBar";
 import ProjectCard from "../src/components/ProjectCard";
 import VersionBadge from "../src/components/VersionBadge";
 import { colors, radius, spacing } from "../src/theme";
-
-
 
 const EMOJI_CHOICES = ["🏠", "👪", "🐶", "🌴", "🛠️", "🧺", "🧾", "🎬", "🎮", "🍔", "✈️", "🚗", "💡", "🔥", "💧", "💳", "📦", "🧸", "🧪", "🧰"];
 
@@ -44,6 +47,7 @@ export default function HomeScreen() {
     const [showModal, setShowModal] = useState(false);
     const [name, setName] = useState("");
     const [currency, setCurrency] = useState("ARS");
+    const [iconEmoji, setIconEmoji] = useState<string>("🏠"); // default
 
     const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
     const [loadingUser, setLoadingUser] = useState(true);
@@ -51,13 +55,12 @@ export default function HomeScreen() {
     const [authUser, setAuthUser] = useState<User | null>(null);
     const [authReady, setAuthReady] = useState(false);
 
+    const [refreshing, setRefreshing] = useState(false); // 👈 estado de refresh
+
     const canCreate = useMemo(
         () => name.trim().length > 0 && authReady && !!authUser,
         [name, authReady, authUser]
     );
-
-    const [iconEmoji, setIconEmoji] = useState<string>("🏠"); // por defecto la casitaaa
-
 
     // cargar user guardado
     useEffect(() => {
@@ -77,25 +80,42 @@ export default function HomeScreen() {
         return () => unsub();
     }, []);
 
-    // proyectos propios
+    // proyectos propios (RT)
     useEffect(() => {
         if (!authReady || !authUser?.uid) return;
         const unsub = subscribeOwnedProjectsByUid(authUser.uid, setItems);
         return () => unsub && unsub();
     }, [authReady, authUser?.uid]);
 
-    // compartidos
+    // compartidos (RT)
     useEffect(() => {
         if (!authReady || !authUser?.uid) return;
         const unsub = subscribeSharedProjectsByUid(authUser.uid, setSharedItems);
         return () => unsub && unsub();
     }, [authReady, authUser?.uid]);
 
+    // pull-to-refresh (gesto manual)
+    const onRefresh = useCallback(async () => {
+        if (!authReady || !authUser?.uid) return;
+        setRefreshing(true);
+        try {
+            const [owned, shared] = await Promise.all([
+                fetchOwnedProjectsOnce(authUser.uid),
+                fetchSharedProjectsOnce(authUser.uid),
+            ]);
+            setItems(owned);
+            setSharedItems(shared);
+        } catch (e) {
+            console.log("pull-to-refresh error:", e);
+        } finally {
+            setRefreshing(false);
+        }
+    }, [authReady, authUser?.uid]);
+
+    // refresco inmediato al volver a Home (cuando vuelve el foco)
     useFocusEffect(
         useCallback(() => {
             if (!authReady || !authUser?.uid) return;
-
-            // refresco “instantáneo” al volver a Home
             (async () => {
                 try {
                     const [owned, shared] = await Promise.all([
@@ -111,7 +131,6 @@ export default function HomeScreen() {
         }, [authReady, authUser?.uid])
     );
 
-
     const onCreate = async () => {
         try {
             if (!authReady || !authUser) {
@@ -121,11 +140,10 @@ export default function HomeScreen() {
             const projectName = name.trim();
             if (!projectName) return;
 
-            // 👇 pasa iconEmoji al servicio
             const id = await createProject(projectName, currency, { iconEmoji });
 
-            setItems(prev => {
-                const without = prev.filter(p => p.id !== id);
+            setItems((prev) => {
+                const without = prev.filter((p) => p.id !== id);
                 return [{ id, name: projectName, currency, role: "owner", iconEmoji }, ...without];
             });
 
@@ -149,40 +167,27 @@ export default function HomeScreen() {
     const mergedProjects = useMemo(() => {
         // Mapa por id para evitar duplicados
         const byId = new Map<string, ProjectListItem>();
-
-        // Primero los propios (owner)
+        // Primero owner
         for (const p of items) byId.set(p.id, p);
-
-        // Luego los compartidos: si ya existe owner, lo dejamos; si no, agregamos member
+        // Luego shared
         for (const p of sharedItems) {
             const existing = byId.get(p.id);
             if (!existing) byId.set(p.id, p);
-            else if (existing.role !== 'owner' && p.role === 'member') byId.set(p.id, p);
+            else if (existing.role !== "owner" && p.role === "member") byId.set(p.id, p);
         }
-
-        // Orden (opcional): owner primero, luego member; y por nombre
+        // Orden: owner primero, luego nombre
         return Array.from(byId.values()).sort((a, b) => {
-            if (a.role !== b.role) return a.role === 'owner' ? -1 : 1;
+            if (a.role !== b.role) return a.role === "owner" ? -1 : 1;
             return a.name.localeCompare(b.name);
         });
     }, [items, sharedItems]);
-
-    // const reload = async () => {
-    //     try {
-    //         if (!authReady || !authUser?.uid) return;
-    //         const rows = await fetchOwnedProjectsOnce(authUser.uid);
-    //         setItems(rows);
-    //     } catch (e: any) {
-    //         Alert.alert("Lectura", e?.message ?? String(e));
-    //     }
-    // };
 
     const renderItem = ({ item }: { item: ProjectListItem & { iconEmoji?: string } }) => (
         <ProjectCard
             name={item.name}
             currency={item.currency}
             role={item.role}
-            iconEmoji={item.iconEmoji} // 👈 lo mostramos
+            iconEmoji={item.iconEmoji}
             onPress={() => router.push(`/projects/${item.id}`)}
         />
     );
@@ -203,13 +208,11 @@ export default function HomeScreen() {
         );
     }
 
-
     const displayName =
         storedUser?.displayName ??
         authUser?.displayName ??
         authUser?.email?.split("@")[0] ??
         "";
-
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -248,21 +251,28 @@ export default function HomeScreen() {
                     keyExtractor={(it) => it.id}
                     renderItem={renderItem}
                     contentContainerStyle={{ paddingBottom: 120 }}
+                    refreshControl={(
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={onRefresh}
+                            tintColor={colors.text}
+                            titleColor={colors.textMuted}
+                        />
+                    )}
                     ListEmptyComponent={
                         <Text style={{ color: colors.textMuted }}>
                             {storedUser
-                                ? "Todavía no tenés proyectos. Creá el primero arriba."
+                                ? "Todavía no tenés proyectos. Deslizá hacia abajo para refrescar."
                                 : "Iniciá sesión para ver tus proyectos."}
                         </Text>
                     }
                 />
-
             </View>
 
             {/* FAB “+” con etiqueta */}
             <FAB onPress={() => setShowModal(true)} label="Crea un proyecto" />
 
-            {/* Modal dark para crear proyecto (con selector de emoji) */}
+            {/* Modal dark para crear proyecto */}
             <Modal visible={showModal} transparent animationType="slide">
                 <View
                     style={{
@@ -390,5 +400,4 @@ export default function HomeScreen() {
             </Modal>
         </SafeAreaView>
     );
-
 }

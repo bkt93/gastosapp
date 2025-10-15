@@ -1,5 +1,5 @@
 // src/services/projects.ts
-import { collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
 export async function createProject(name: string, currency = 'ARS', opts?: { iconEmoji?: string }) {
@@ -34,6 +34,17 @@ export async function createProject(name: string, currency = 'ARS', opts?: { ico
     });
 
     await batch.commit();
+
+    await setDoc(
+        doc(collection(db, 'projectMembersFlat'), `${projectRef.id}_${user.uid}`),
+        {
+            projectId: projectRef.id,
+            uid: user.uid,
+            role: 'owner',
+            joinedAt: now,
+        }
+    );
+
     return projectRef.id;
 }
 
